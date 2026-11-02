@@ -28,6 +28,7 @@ var _finished_emitted := false
 
 var ship_nodes: Dictionary = {}      # uid -> Node3D
 var comp_mats: Dictionary = {}       # "uid:index" -> StandardMaterial3D
+var emitters: Dictionary = {}        # uid -> CPUParticles3D（受损舱室的火花/碎屑）
 var crew_units: Dictionary = {}      # uid -> Array[Dictionary]
 var flying_crew: Array = []          # {node, vel, spin, life}
 var beam_mesh: ImmediateMesh
@@ -115,7 +116,60 @@ func _build_ships() -> void:
 			comp_mats["%d:%d" % [ship.uid, comp.index]] = mat
 
 		_build_crew_for(node, ship)
+		var em := _make_emitter()
+		node.add_child(em)
+		emitters[ship.uid] = em
 		ship_nodes[ship.uid] = node
+
+## 受损舱室的粒子发射器：引擎喷火花、武器舱掉碎屑、护盾冒电弧。
+func _make_emitter() -> CPUParticles3D:
+	var p := CPUParticles3D.new()
+	p.amount = 16
+	p.lifetime = 0.75
+	p.emitting = false
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = 0.45
+	p.direction = Vector3(0, 0.5, 0)
+	p.spread = 75.0
+	p.initial_velocity_min = 0.8
+	p.initial_velocity_max = 2.8
+	p.gravity = Vector3(0, -1.4, 0)
+	p.scale_amount_min = 0.04
+	p.scale_amount_max = 0.13
+	var m := BoxMesh.new()
+	m.size = Vector3(1, 1, 1)
+	p.mesh = m
+	return p
+
+func _spark_color(kind: int) -> Color:
+	match kind:
+		Model.CompType.ENGINE:   return Color(1.0, 0.45, 0.10)
+		Model.CompType.WEAPON:   return Color(1.0, 0.85, 0.35)
+		Model.CompType.MAGAZINE: return Color(1.0, 0.30, 0.20)
+		Model.CompType.SHIELD:   return Color(0.45, 0.65, 1.0)
+		Model.CompType.CREW:     return Color(0.95, 0.95, 0.95)
+		Model.CompType.SENSOR:   return Color(0.45, 0.95, 0.95)
+	return Color(1, 1, 1)
+
+func _update_damage_emitter(ship, node: Node3D) -> void:
+	var em: CPUParticles3D = emitters.get(ship.uid)
+	if em == null:
+		return
+	if not ship.alive():
+		em.emitting = false
+		return
+	var worst = null
+	for c in ship.compartments:
+		if c.alive() and c.hp_ratio() < 0.72:
+			if worst == null or c.hp_ratio() < worst.hp_ratio():
+				worst = c
+	if worst == null:
+		em.emitting = false
+		return
+	em.position = worst.local_offset()
+	em.emitting = true
+	em.color = _spark_color(worst.kind)
+	em.amount = 10 + int((1.0 - worst.hp_ratio()) * 18.0)
 
 func _build_crew_for(ship_node: Node3D, ship) -> void:
 	var units: Array = []
@@ -326,6 +380,7 @@ func _sync_ships() -> void:
 			else:
 				mat.albedo_color = Model.comp_color(comp.kind)
 				mat.emission = Model.comp_color(comp.kind) * 0.25
+		_update_damage_emitter(ship, node)
 
 # ---------------------------------------------------------------- 船员
 
