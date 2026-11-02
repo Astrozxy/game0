@@ -204,13 +204,24 @@ func move_ship(ship, dt: float) -> void:
 			best = d
 			nearest = e
 	var d: float = best
-	var desired_gap := 18.0 if hold_range else 10.0
+	# 手册决定"允许的交战距离上限"，舰长在手册范围内决定实际保持多远。
+	# 关键：舰长的偏好必须被手册夹住，否则谨慎舰长会退到射程外，永远不开火。
+	var desired_gap := 18.0
+	if ship.captain != null:
+		desired_gap *= ship.captain.gap_mult()
+	desired_gap = clampf(desired_gap, 6.0, doctrine_max_range() - 2.0)
 	if d > desired_gap + 2.0:
 		var dir: Vector3 = (nearest.pos - ship.pos).normalized()
 		ship.pos += dir * ship.speed() * dt
 	elif d < desired_gap - 2.0:
 		var dir: Vector3 = (ship.pos - nearest.pos).normalized()
 		ship.pos += dir * ship.speed() * 0.6 * dt
+
+func doctrine_max_range() -> float:
+	match fire_band:
+		"close": return LASER_CLOSE_RANGE
+		"far":   return LASER_MAX_RANGE
+		_:       return LASER_MID_RANGE
 
 # ---------------------------------------------------------------- 开火
 
@@ -290,7 +301,10 @@ func fire_laser(ship, comp, target) -> void:
 	ship_shots[ship.uid] = ship_shots.get(ship.uid, 0) + 1
 	var d: float = (target.pos - ship.pos).length()
 	var band := range_band(d)
-	var acc: float = clampf(band_accuracy(band) * ship.accuracy(), 0.05, 0.98)
+	var acc: float = band_accuracy(band) * ship.accuracy()
+	if ship.captain != null:
+		acc *= ship.captain.accuracy_mod()
+	acc = clampf(acc, 0.05, 0.98)
 	var from: Vector3 = ship.comp_world_pos(comp)
 
 	var r: RandomNumberGenerator = _rngs[ship.uid]
@@ -404,10 +418,13 @@ func summary() -> Dictionary:
 		var comps := {}
 		var crew_lost := 0
 		var crew_left := 0
+		var captains: Array = []
 		for s in ships:
 			if s.team != team:
 				continue
 			total += 1
+			if s.captain != null:
+				captains.append(s.captain.label())
 			if s.alive():
 				survived += 1
 				hull_sum += s.hull_integrity()
@@ -425,6 +442,7 @@ func summary() -> Dictionary:
 			"comps": comps,
 			"crew_lost": crew_lost,
 			"crew_left": crew_left,
+			"captains": captains,
 		}
 	out["time"] = snappedf(t, 0.1)
 	out["winner"] = winner
@@ -433,11 +451,12 @@ func summary() -> Dictionary:
 
 # ---------------------------------------------------------------- 场景构造
 
-static func make_battle(n_per_side: int, seed: int, loadout: Array) -> BattleSim:
+static func make_battle(n_per_side: int, seed: int, loadout: Array,
+		doctrine: Dictionary = {}) -> BattleSim:
 	var ships: Array = []
 	var uid := 0
-	# 沿 Z 轴展开（深度），X 是两军间距，Y 只做少量高度差。
-	# 这样从斜上方看是一张战术图，而不是一列竖排。
+	# 沿 Z 轴展开（深度），X 是两军间距，Y 做少量高度差。
+	# 敌方 z 取反：让两队阵型正好是 180° 旋转关系，避免手性不对称。
 	for i in n_per_side:
 		var off := (float(i) - (n_per_side - 1) / 2.0) * 4.0
 		var p := Model.ShipModel.new(uid, "P-%02d" % (i + 1), "player",
@@ -452,5 +471,19 @@ static func make_battle(n_per_side: int, seed: int, loadout: Array) -> BattleSim
 		e.heading = Vector3(-1, 0, 0)
 		ships.append(e)
 		uid += 1
+
+	# 舰长是随机的，玩家不能指定——只能通过手册约束他们。
+	# 每舰用独立种子，避免"玩家先抽、敌人后抽"变成系统性差异。
+	for s in ships:
+		var crng := RandomNumberGenerator.new()
+		crng.seed = hash("%d:captain:%d" % [seed, s.uid])
+		s.captain = Model.make_captain(crng)
+
 	var sim := BattleSim.new(ships, seed)
+	if doctrine.has("fire_band"):
+		sim.fire_band = doctrine["fire_band"]
+	if doctrine.has("focus_fire"):
+		sim.focus_fire = doctrine["focus_fire"]
+	if doctrine.has("hold_range"):
+		sim.hold_range = doctrine["hold_range"]
 	return sim

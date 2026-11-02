@@ -18,6 +18,7 @@ const MIN_DIST := 16.0
 const MAX_DIST := 150.0
 
 var loadout: Array = []
+var doctrine: Dictionary = {}
 var sim: BattleSim
 var paused := false
 var speed_scale := 1.0
@@ -45,7 +46,7 @@ var crew_label: Label
 
 func _ready() -> void:
 	_setup_world()
-	sim = BattleSim.make_battle(SHIPS_PER_SIDE, randi(), loadout)
+	sim = BattleSim.make_battle(SHIPS_PER_SIDE, randi(), loadout, doctrine)
 	_build_ships()
 	_build_hud()
 	_apply_camera()
@@ -488,6 +489,9 @@ func _show_result() -> void:
 		lines.append("%s：存活 %d / %d，平均船体 %.0f%%" % [
 			label, d["survived"], d["total"], d["avg_hull"] * 100.0])
 		lines.append("　　阵亡船员：%d 人，幸存 %d 人" % [d["crew_lost"], d["crew_left"]])
+		var caps: Array = d.get("captains", [])
+		if caps.size() > 0:
+			lines.append("　　舰长：" + "、".join(caps))
 		var comps: Dictionary = d["comps"]
 		if comps.size() > 0:
 			var parts: Array = []

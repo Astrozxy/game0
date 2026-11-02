@@ -6,7 +6,7 @@ var current: Node = null
 func _ready() -> void:
 	# 默认：直接开打，打完自动下一局（不需要任何点击）。
 	# 想自己配船时用 --builder 启动。
-	if OS.get_cmdline_args().has("--builder"):
+	if OS.get_cmdline_args().has("--builder") or OS.get_cmdline_user_args().has("--builder"):
 		_show_builder()
 	else:
 		_on_launch(Model.default_loadout())
@@ -23,10 +23,11 @@ func _show_builder() -> void:
 	add_child(b)
 	current = b
 
-func _on_launch(loadout: Array) -> void:
+func _on_launch(loadout: Array, doctrine: Dictionary = {}) -> void:
 	_clear()
 	var v: Node3D = preload("res://battle/battle_view.gd").new()
 	v.loadout = loadout
+	v.doctrine = doctrine
 	v.finished.connect(_on_finished)
 	add_child(v)
 	current = v

@@ -10,6 +10,7 @@ extends RefCounted
 
 enum CompType { WEAPON, MAGAZINE, CREW, ENGINE, SHIELD, SENSOR }
 enum CompState { ONLINE, DAMAGED, OFFLINE }
+enum CapType { AGGRESSIVE, STEADY, CAUTIOUS }
 
 const HULL_RADIUS := 1.15
 const SLOT_COUNT := 10
@@ -64,6 +65,54 @@ static func comp_name(kind: int) -> String:
 		CompType.SHIELD:   return "护盾发生器"
 		CompType.SENSOR:   return "传感器"
 	return "舱室"
+
+# ---------------------------------------------------------------- 舰长
+#
+# 玩家不能指定舰长。舰长的性格决定他"在手册允许的范围内"怎么打：
+# 激进 = 贴得更近（命中高、挨打也多）；谨慎 = 拉得更远（安全但打得慢）。
+# 玩家能做的是编写手册（允许的交战边界）和指定舰队指挥官。
+
+static func cap_name(kind: int) -> String:
+	match kind:
+		CapType.AGGRESSIVE: return "激进"
+		CapType.STEADY:     return "稳健"
+		CapType.CAUTIOUS:   return "谨慎"
+	return "未知"
+
+
+class Captain:
+	var captain_name: String
+	var personality: int
+
+	func _init(p_name: String, p_personality: int) -> void:
+		captain_name = p_name
+		personality = p_personality
+
+	func gap_mult() -> float:
+		match personality:
+			Model.CapType.AGGRESSIVE: return 0.72
+			Model.CapType.CAUTIOUS:   return 1.28
+			_:                        return 1.0
+
+	func accuracy_mod() -> float:
+		match personality:
+			Model.CapType.AGGRESSIVE: return 0.95
+			Model.CapType.CAUTIOUS:   return 1.06
+			_:                        return 1.0
+
+	func label() -> String:
+		return "%s（%s）" % [captain_name, Model.cap_name(personality)]
+
+
+const CAPTAIN_NAMES: Array = [
+	"林澈", "周野", "沈渡", "顾行", "陆遥", "许铮",
+	"程砾", "韩烬", "苏牧", "叶迟", "郑临", "白砚",
+]
+
+static func make_captain(rng: RandomNumberGenerator) -> Captain:
+	var n: String = CAPTAIN_NAMES[rng.randi_range(0, CAPTAIN_NAMES.size() - 1)]
+	var p: int = [CapType.AGGRESSIVE, CapType.STEADY, CapType.CAUTIOUS][rng.randi_range(0, 2)]
+	return Captain.new(n, p)
 
 static func comp_color(kind: int) -> Color:
 	match kind:
@@ -179,6 +228,7 @@ class ShipModel:
 	var compartments: Array = []
 	var dc_budget := 120.0
 	var dc_rate := 1.6
+	var captain = null      # Model.Captain：玩家不能指定
 
 	func _init(p_uid: int, p_name: String, p_team: String, p_pos: Vector3,
 			loadout: Array = []) -> void:
