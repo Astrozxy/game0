@@ -107,6 +107,8 @@ class Captain:
 const CAPTAIN_NAMES: Array = [
 	"林澈", "周野", "沈渡", "顾行", "陆遥", "许铮",
 	"程砾", "韩烬", "苏牧", "叶迟", "郑临", "白砚",
+	"秦砚", "谢陵", "裴舟", "温序", "阮明", "霍川",
+	"岑野", "闻笛", "商陆", "祁寒", "薛岸", "罗启",
 ]
 
 static func make_captain(rng: RandomNumberGenerator) -> Captain:

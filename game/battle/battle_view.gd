@@ -498,6 +498,23 @@ func _show_result() -> void:
 			for k in comps.keys():
 				parts.append("%s×%d" % [k, comps[k]])
 			lines.append("　　损失舱室：" + "，".join(parts))
+
+		# 归因：这一方的损失主要来自哪类舱室
+		var dmgc: Dictionary = d.get("dmg_by_comp", {})
+		if dmgc.size() > 0:
+			var total_dmg := 0.0
+			for v in dmgc.values():
+				total_dmg += float(v)
+			var keys: Array = dmgc.keys()
+			keys.sort_custom(func(a, b): return float(dmgc[a]) > float(dmgc[b]))
+			var parts2: Array = []
+			for i in mini(3, keys.size()):
+				var kk: String = keys[i]
+				parts2.append("%s %.0f%%" % [kk, float(dmgc[kk]) * 100.0 / maxf(1.0, total_dmg)])
+			lines.append("　　损失来源：" + "，".join(parts2))
+
+		if int(d.get("top_kills", 0)) > 0:
+			lines.append("　　头号战果：%s（%d 杀）" % [d["top_killer"], d["top_kills"]])
 	text.text = "\n".join(lines)
 	panel.add_child(text)
 

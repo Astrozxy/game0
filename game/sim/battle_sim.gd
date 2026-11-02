@@ -46,6 +46,10 @@ var stat_damage := {"player": 0.0, "enemy": 0.0}
 var ship_shots := {}      # uid -> int
 var ship_dmg_dealt := {}  # uid -> float
 var ship_dmg_taken := {}  # uid -> float
+var ship_kills := {}      # uid -> int
+
+# 归因：每方"损失来自哪类舱室"
+var dmg_by_comp := {"player": {}, "enemy": {}}
 
 func _init(p_ships: Array, p_seed: int = 12345) -> void:
 	ships = p_ships
@@ -333,6 +337,9 @@ func fire_laser(ship, comp, target) -> void:
 	stat_damage[ship.team] += dealt
 	ship_dmg_dealt[ship.uid] = ship_dmg_dealt.get(ship.uid, 0.0) + dealt
 	ship_dmg_taken[target.uid] = ship_dmg_taken.get(target.uid, 0.0) + dealt
+	var bucket: Dictionary = dmg_by_comp[target.team]
+	var cname: String = Model.comp_name(hit_comp.kind)
+	bucket[cname] = bucket.get(cname, 0.0) + dealt
 
 	# 失压：船员被抛出（表现层会用这个位置生成飞出去的小人）
 	if hit_comp.breached and not was_breached:
@@ -353,7 +360,9 @@ func fire_laser(ship, comp, target) -> void:
 			Model.comp_name(hit_comp.kind), dealt], ship.team, ship.uid, target.uid, dealt)
 
 	if not target.alive():
-		log_event("kill", "%s 失去战斗力" % target.ship_name, target.team, target.uid)
+		ship_kills[ship.uid] = ship_kills.get(ship.uid, 0) + 1
+		log_event("kill", "%s 失去战斗力（%s 的战果）" % [target.ship_name, ship.ship_name],
+			target.team, target.uid)
 
 func resolve_hit_compartment(shooter, target, origin: Vector3, r: RandomNumberGenerator):
 	# 在"目标自身坐标系"里判定：谁的朝向最接近来袭方向，谁挨打。
@@ -419,12 +428,18 @@ func summary() -> Dictionary:
 		var crew_lost := 0
 		var crew_left := 0
 		var captains: Array = []
+		var top_killer := ""
+		var top_kills := 0
 		for s in ships:
 			if s.team != team:
 				continue
 			total += 1
 			if s.captain != null:
 				captains.append(s.captain.label())
+			var k: int = ship_kills.get(s.uid, 0)
+			if k > top_kills:
+				top_kills = k
+				top_killer = s.ship_name
 			if s.alive():
 				survived += 1
 				hull_sum += s.hull_integrity()
@@ -443,6 +458,9 @@ func summary() -> Dictionary:
 			"crew_lost": crew_lost,
 			"crew_left": crew_left,
 			"captains": captains,
+			"dmg_by_comp": dmg_by_comp[team].duplicate(),
+			"top_killer": top_killer,
+			"top_kills": top_kills,
 		}
 	out["time"] = snappedf(t, 0.1)
 	out["winner"] = winner
@@ -473,11 +491,24 @@ static func make_battle(n_per_side: int, seed: int, loadout: Array,
 		uid += 1
 
 	# 舰长是随机的，玩家不能指定——只能通过手册约束他们。
-	# 每舰用独立种子，避免"玩家先抽、敌人后抽"变成系统性差异。
+	# 名字从池里不重复分配；性格用每舰独立种子，避免"玩家先抽、敌人后抽"的偏差。
+	var pool: Array = Model.CAPTAIN_NAMES.duplicate()
+	var nrng := RandomNumberGenerator.new()
+	nrng.seed = hash("%d:names" % seed)
+	for i in range(pool.size() - 1, 0, -1):
+		var j := nrng.randi_range(0, i)
+		var tmp = pool[i]
+		pool[i] = pool[j]
+		pool[j] = tmp
+
+	var name_idx := 0
 	for s in ships:
 		var crng := RandomNumberGenerator.new()
 		crng.seed = hash("%d:captain:%d" % [seed, s.uid])
-		s.captain = Model.make_captain(crng)
+		var pers: int = [Model.CapType.AGGRESSIVE, Model.CapType.STEADY, Model.CapType.CAUTIOUS][crng.randi_range(0, 2)]
+		var nm: String = pool[name_idx % pool.size()]
+		name_idx += 1
+		s.captain = Model.Captain.new(nm, pers)
 
 	var sim := BattleSim.new(ships, seed)
 	if doctrine.has("fire_band"):
