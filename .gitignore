@@ -1,0 +1,20 @@
+# Godot 编辑器缓存与导入产物
+.godot/
+*.import
+
+# 引擎本体（172MB，不进仓库；用 tools/fetch_godot.py 重新下载）
+tools/godot/
+
+# 本地运行产物
+out/
+.godot_appdata/
+.godot_localappdata/
+
+# Python 缓存（早期原型）
+__pycache__/
+*.pyc
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
