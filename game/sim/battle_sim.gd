@@ -448,7 +448,7 @@ static func make_battle(n_per_side: int, seed: int, loadout: Array) -> BattleSim
 	for i in n_per_side:
 		var off := (float(i) - (n_per_side - 1) / 2.0) * 4.0
 		var e := Model.ShipModel.new(uid, "E-%02d" % (i + 1), "enemy",
-			Vector3(30.0, float(i % 3 - 1) * 0.8, off), loadout)
+			Vector3(30.0, float(i % 3 - 1) * 0.8, -off), loadout)
 		e.heading = Vector3(-1, 0, 0)
 		ships.append(e)
 		uid += 1
