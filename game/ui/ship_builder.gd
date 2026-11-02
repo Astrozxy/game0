@@ -101,7 +101,6 @@ func _build_ui() -> void:
 	var band_defs := [
 		["close", "允许近距"],
 		["mid", "允许中距"],
-		["far", "允许远距"],
 	]
 	var bx: float = W - panel_w - W * 0.02
 	var bw: float = minf(132.0, panel_w / 3.0 - 8.0)
@@ -125,6 +124,13 @@ func _build_ui() -> void:
 	focus_btn.button_pressed = true
 	focus_btn.toggled.connect(func(on: bool): doctrine["focus_fire"] = on)
 	add_child(focus_btn)
+
+	var far_note := Label.new()
+	far_note.text = "远距暂不开放：目前只有一种激光，远距开火只有劣势"
+	far_note.position = Vector2(W - panel_w - W * 0.02 + bw * 2.0 + 24.0, H * 0.655)
+	far_note.add_theme_font_size_override("font_size", 12)
+	far_note.add_theme_color_override("font_color", Color(0.50, 0.55, 0.62))
+	add_child(far_note)
 
 	var launch_btn := Button.new()
 	launch_btn.text = "出　击"

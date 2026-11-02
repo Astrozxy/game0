@@ -13,6 +13,7 @@ const LASER_MID_RANGE := 22.0
 const LASER_CLOSE_RANGE := 12.0
 const LASER_COOLDOWN := 1.2
 const LASER_BASE_DAMAGE := 26.0
+const LASER_COST := 17.0          # 每次开火消耗的能量
 const WEAPON_ARC_HALF_DEG := 100.0
 const BEAM_LIFE := 0.12
 
@@ -26,10 +27,12 @@ var beams: Array = []       # {a: Vector3, b: Vector3, life: float, team: String
 var over := false
 var winner := ""
 
-# 手册
-var fire_band := "mid"
-var focus_fire := true
-var hold_range := true
+# 战斗手册：双方各一本。玩家在配船时定自己的，敌方由 AI 预设。
+# band: close / mid / far（允许开火的最远档位）；focus: 是否集火残血。
+var doctrine := {
+	"player": {"band": "mid", "focus": true},
+	"enemy": {"band": "mid", "focus": true},
+}
 
 var _cooldowns: Dictionary = {}   # "uid:index" -> 剩余秒
 var _rngs: Dictionary = {}        # uid -> RandomNumberGenerator（每舰独立随机流）
@@ -170,7 +173,8 @@ func pick_target(ship):
 	var tied: Array = []
 	for e in enemies:
 		var d: float = (e.pos - ship.pos).length()
-		var score: float = d * (0.4 + e.hull_integrity()) if focus_fire else d
+		var focus_on: bool = doctrine[ship.team]["focus"]
+		var score: float = d * (0.4 + e.hull_integrity()) if focus_on else d
 		if score < best_score - 0.001:
 			best_score = score
 			tied = [e]
@@ -209,11 +213,11 @@ func move_ship(ship, dt: float) -> void:
 			nearest = e
 	var d: float = best
 	# 手册决定"允许的交战距离上限"，舰长在手册范围内决定实际保持多远。
-	# 关键：舰长的偏好必须被手册夹住，否则谨慎舰长会退到射程外，永远不开火。
+	# 舰长的偏好必须被手册夹住，否则谨慎舰长会退到射程外变成哑巴。
 	var desired_gap := 18.0
 	if ship.captain != null:
 		desired_gap *= ship.captain.gap_mult()
-	desired_gap = clampf(desired_gap, 6.0, doctrine_max_range() - 2.0)
+	desired_gap = clampf(desired_gap, 6.0, doctrine_max_range(ship.team) - 2.0)
 	if d > desired_gap + 2.0:
 		var dir: Vector3 = (nearest.pos - ship.pos).normalized()
 		ship.pos += dir * ship.speed() * dt
@@ -221,8 +225,8 @@ func move_ship(ship, dt: float) -> void:
 		var dir: Vector3 = (ship.pos - nearest.pos).normalized()
 		ship.pos += dir * ship.speed() * 0.6 * dt
 
-func doctrine_max_range() -> float:
-	match fire_band:
+func doctrine_max_range(team: String) -> float:
+	match doctrine[team]["band"]:
 		"close": return LASER_CLOSE_RANGE
 		"far":   return LASER_MAX_RANGE
 		_:       return LASER_MID_RANGE
@@ -250,9 +254,9 @@ func band_damage(d: float) -> float:
 		return 0.78
 	return 0.45
 
-func doctrine_allows(d: float) -> bool:
+func doctrine_allows(d: float, team: String) -> bool:
 	var order := {"close": 0, "mid": 1, "far": 2}
-	return order[range_band(d)] <= order[fire_band]
+	return order[range_band(d)] <= order[doctrine[team]["band"]]
 
 func ship_fire(ship) -> void:
 	var weapons: Array = ship.weapons()
@@ -282,7 +286,7 @@ func weapon_can_hit(ship, comp, target) -> bool:
 	var d: float = (target.pos - ship.pos).length()
 	if d > LASER_MAX_RANGE:
 		return false
-	if not doctrine_allows(d):
+	if not doctrine_allows(d, ship.team):
 		return false
 	var mount_dir: Vector3 = (ship.basis() * comp.local_offset()).normalized()
 	var to_target: Vector3 = (target.pos - ship.pos).normalized()
@@ -464,6 +468,7 @@ func summary() -> Dictionary:
 		}
 	out["time"] = snappedf(t, 0.1)
 	out["winner"] = winner
+	out["doctrine"] = doctrine.duplicate(true)
 	return out
 
 
@@ -511,10 +516,13 @@ static func make_battle(n_per_side: int, seed: int, loadout: Array,
 		s.captain = Model.Captain.new(nm, pers)
 
 	var sim := BattleSim.new(ships, seed)
+	# 玩家的手册来自配船界面；敌方用传入的 AI 手册（默认中距 + 集火）。
 	if doctrine.has("fire_band"):
-		sim.fire_band = doctrine["fire_band"]
+		sim.doctrine["player"]["band"] = doctrine["fire_band"]
 	if doctrine.has("focus_fire"):
-		sim.focus_fire = doctrine["focus_fire"]
-	if doctrine.has("hold_range"):
-		sim.hold_range = doctrine["hold_range"]
+		sim.doctrine["player"]["focus"] = doctrine["focus_fire"]
+	if doctrine.has("enemy_band"):
+		sim.doctrine["enemy"]["band"] = doctrine["enemy_band"]
+	if doctrine.has("enemy_focus"):
+		sim.doctrine["enemy"]["focus"] = doctrine["enemy_focus"]
 	return sim

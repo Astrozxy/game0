@@ -43,6 +43,7 @@ var result_layer: Control
 var _pause_btn: Button
 var _speed_btn: Button
 var crew_label: Label
+var _doc_label: Label
 
 func _ready() -> void:
 	_setup_world()
@@ -203,6 +204,19 @@ func _build_hud() -> void:
 	hint.add_theme_font_size_override("font_size", 13)
 	hint.add_theme_color_override("font_color", Color(0.45, 0.50, 0.58))
 	layer.add_child(hint)
+
+	var doc_label := Label.new()
+	doc_label.position = Vector2(360, 14)
+	doc_label.add_theme_font_size_override("font_size", 14)
+	doc_label.add_theme_color_override("font_color", Color(0.78, 0.72, 0.60))
+	layer.add_child(doc_label)
+	_doc_label = doc_label
+
+func _band_label(b: String) -> String:
+	match b:
+		"close": return "允许近距"
+		"far":   return "允许远距"
+		_:       return "允许中距"
 
 func _toggle_pause() -> void:
 	paused = not paused
@@ -424,6 +438,7 @@ func _update_hud() -> void:
 			e_crew += s.crew_alive()
 	time_label.text = "时间 %5.1f 秒　·　我方 %d 舰　·　敌方 %d 舰" % [
 		sim.t, sim.team_alive("player"), sim.team_alive("enemy")]
+	_doc_label.text = "手册：%s · %s" % [_band_label(sim.doctrine["player"]["band"]), "集火" if sim.doctrine["player"]["focus"] else "自由射击"]
 	crew_label.text = "船员：我方 %d 人　·　敌方 %d 人" % [p_crew, e_crew]
 
 	var lines: Array = []
@@ -483,6 +498,17 @@ func _show_result() -> void:
 		verdict = "两败俱伤"
 	lines.append(verdict)
 	lines.append("")
+	var doc: Dictionary = s.get("doctrine", {})
+	if doc.size() > 0:
+		var pd: Dictionary = doc.get("player", {})
+		var ed: Dictionary = doc.get("enemy", {})
+		lines.append("我方手册：%s · %s" % [
+			_band_label(pd.get("band", "mid")),
+			"集火" if pd.get("focus", true) else "自由射击"])
+		lines.append("敌方手册：%s · %s" % [
+			_band_label(ed.get("band", "mid")),
+			"集火" if ed.get("focus", true) else "自由射击"])
+		lines.append("")
 	for team in ["player", "enemy"]:
 		var d: Dictionary = s[team]
 		var label := "我方" if team == "player" else "敌方"

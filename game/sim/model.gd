@@ -232,6 +232,21 @@ class ShipModel:
 	var dc_rate := 1.6
 	var captain = null      # Model.Captain：玩家不能指定
 
+	# 武器能量池：开火要耗能，回充需要时间。
+	# 这让"什么时候开火"变成真正的取舍：远距乱打会把能量浪费在低命中上。
+	var energy := 100.0
+	var energy_max := 100.0
+	var energy_regen := 11.0
+
+	func regen_energy(dt: float) -> void:
+		energy = minf(energy_max, energy + energy_regen * dt)
+
+	func can_fire(cost: float) -> bool:
+		return energy >= cost
+
+	func spend_energy(cost: float) -> void:
+		energy = maxf(0.0, energy - cost)
+
 	func _init(p_uid: int, p_name: String, p_team: String, p_pos: Vector3,
 			loadout: Array = []) -> void:
 		uid = p_uid
