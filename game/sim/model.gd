@@ -45,6 +45,16 @@ static func comp_radius(kind: int) -> float:
 		CompType.SENSOR:   return 0.40
 	return 0.5
 
+static func comp_crew(kind: int) -> int:
+	match kind:
+		CompType.WEAPON:   return 6
+		CompType.MAGAZINE: return 4
+		CompType.CREW:     return 10
+		CompType.ENGINE:   return 5
+		CompType.SHIELD:   return 4
+		CompType.SENSOR:   return 3
+	return 4
+
 static func comp_name(kind: int) -> String:
 	match kind:
 		CompType.WEAPON:   return "武器舱"
@@ -91,6 +101,11 @@ class Compartment:
 	var armor: float
 	var state: int = Model.CompState.ONLINE
 
+	# 船员：每个舱室有自己的编制。玩家不能操作他们，只能看他们干活和死。
+	var crew: int = 0
+	var crew_max: int = 0
+	var breached: bool = false      # 是否已失压（被击穿，人会飞出去）
+
 	func _init(p_index: int, p_kind: int) -> void:
 		index = p_index
 		kind = p_kind
@@ -99,6 +114,16 @@ class Compartment:
 		radius = Model.comp_radius(p_kind)
 		hp = Model.comp_max_hp(p_kind)
 		armor = Model.comp_armor(p_kind)
+		crew_max = Model.comp_crew(p_kind)
+		crew = crew_max
+
+	func crew_ratio() -> float:
+		return float(crew) / maxf(1.0, float(crew_max))
+
+	func kill_crew(n: int) -> int:
+		var dead: int = mini(n, crew)
+		crew -= dead
+		return dead
 
 	func max_hp() -> float:
 		return Model.comp_max_hp(kind)
@@ -123,9 +148,19 @@ class Compartment:
 		if effective <= 0.0:
 			return 0.0
 		hp -= effective
+
+		# 船员伤亡（确定性，方便回放）：伤害越重，死得越多。
+		if crew > 0:
+			var cas: int = int(effective / 10.0)
+			if cas < 1 and effective > 3.0:
+				cas = 1
+			kill_crew(cas)
+
 		if hp <= 0.0:
 			hp = 0.0
 			state = Model.CompState.OFFLINE
+			breached = true
+			crew = 0
 		elif hp_ratio() < 0.40:
 			state = Model.CompState.DAMAGED
 		return effective
@@ -182,19 +217,37 @@ class ShipModel:
 			return base * 0.15
 		return base * (0.25 + 0.75 * engines / _count(Model.CompType.ENGINE))
 
+	func crew_alive() -> int:
+		var n := 0
+		for c in compartments:
+			n += c.crew
+		return n
+
+	func crew_capacity() -> int:
+		var n := 0
+		for c in compartments:
+			n += c.crew_max
+		return n
+
+	func crew_ratio() -> float:
+		return float(crew_alive()) / maxf(1.0, float(crew_capacity()))
+
 	func accuracy() -> float:
 		var sensors := _sum_eff(Model.CompType.SENSOR)
-		var crew := _sum_eff(Model.CompType.CREW)
-		return 0.55 + 0.30 * (sensors / _count(Model.CompType.SENSOR)) \
-			+ 0.15 * (crew / _count(Model.CompType.CREW))
+		var crew_eff := _sum_eff(Model.CompType.CREW)
+		var base := 0.55 + 0.30 * (sensors / _count(Model.CompType.SENSOR)) \
+			+ 0.15 * (crew_eff / _count(Model.CompType.CREW))
+		# 人死了就打不准
+		return base * (0.55 + 0.45 * crew_ratio())
 
 	func damage_reduction() -> float:
 		var shields := _sum_eff(Model.CompType.SHIELD)
 		return minf(0.6, 0.6 * shields / _count(Model.CompType.SHIELD))
 
 	func repair_rate() -> float:
-		var crew := _sum_eff(Model.CompType.CREW)
-		return dc_rate * (0.4 + 0.6 * crew / _count(Model.CompType.CREW))
+		var crew_eff := _sum_eff(Model.CompType.CREW)
+		return dc_rate * (0.4 + 0.6 * crew_eff / _count(Model.CompType.CREW)) \
+			* (0.3 + 0.7 * crew_ratio())
 
 	func weapons() -> Array:
 		var out: Array = []

@@ -32,18 +32,38 @@ var focus_fire := true
 var hold_range := true
 
 var _cooldowns: Dictionary = {}   # "uid:index" -> 剩余秒
+var _rngs: Dictionary = {}        # uid -> RandomNumberGenerator（每舰独立随机流）
+
+# 失压抛人事件：给表现层用，只负责"哪里、多少人"，逻辑层不关心怎么画。
+var ejections: Array = []
 
 # 诊断计数器：排查两军不对称用
 var stat_shots := {"player": 0, "enemy": 0}
 var stat_hits := {"player": 0, "enemy": 0}
 var stat_damage := {"player": 0.0, "enemy": 0.0}
 
+# 逐舰统计
+var ship_shots := {}      # uid -> int
+var ship_dmg_dealt := {}  # uid -> float
+var ship_dmg_taken := {}  # uid -> float
+
 func _init(p_ships: Array, p_seed: int = 12345) -> void:
 	ships = p_ships
 	rng.seed = p_seed
+	# 预热：连续整数种子在某些 RNG 上，开头若干随机数相关性偏强。
+	# 初始冷却又是按"玩家先、敌人后"顺序赋值的，伪相关会直接变成阵营偏差。
+	# 先丢弃一批随机数，切断种子值与首批赋值之间的关系。
+	for _i in 32:
+		rng.randf()
+
 	for s in ships:
+		# 每艘船一条独立随机流：否则"谁先取数"会随数组顺序变化，
+		# 在多舰混战里会把顺序变成系统性优势。
+		var r := RandomNumberGenerator.new()
+		r.seed = hash("%d:%d" % [p_seed, s.uid])
+		_rngs[s.uid] = r
 		for c in s.weapons():
-			_cooldowns["%d:%d" % [s.uid, c.index]] = rng.randf_range(0.0, LASER_COOLDOWN)
+			_cooldowns["%d:%d" % [s.uid, c.index]] = r.randf_range(0.0, LASER_COOLDOWN)
 
 # ---------------------------------------------------------------- 查询
 
@@ -115,17 +135,25 @@ func step(dt: float) -> void:
 		if beams[i]["life"] <= 0.0:
 			beams.remove_at(i)
 
-	for team in ["player", "enemy"]:
-		if team_alive(team) == 0:
-			over = true
-			winner = "enemy" if team == "player" else "player"
-			log_event("end", "%s获胜" % ("我方" if winner == "player" else "敌方"), winner)
-			return
+	# 结束判定必须同时看两方：否则"同归于尽"会被判成敌方获胜，
+	# 在多舰混战里这会形成系统性偏差。
+	var p_alive := team_alive("player")
+	var e_alive := team_alive("enemy")
+	if p_alive == 0 or e_alive == 0:
+		over = true
+		if p_alive == 0 and e_alive == 0:
+			winner = "draw"
+			log_event("end", "两败俱伤")
+		elif p_alive == 0:
+			winner = "enemy"
+			log_event("end", "敌方获胜", "enemy")
+		else:
+			winner = "player"
+			log_event("end", "我方获胜", "player")
+		return
 	if t >= duration:
 		over = true
-		var p := team_alive("player")
-		var e := team_alive("enemy")
-		winner = "player" if p > e else ("enemy" if e > p else "draw")
+		winner = "player" if p_alive > e_alive else ("enemy" if e_alive > p_alive else "draw")
 		log_event("end", "时间到，判定：%s" % winner)
 
 # ---------------------------------------------------------------- 目标
@@ -134,15 +162,22 @@ func pick_target(ship):
 	var enemies := enemies_of(ship)
 	if enemies.is_empty():
 		return null
-	var best = enemies[0]
 	var best_score := INF
+	var tied: Array = []
 	for e in enemies:
 		var d: float = (e.pos - ship.pos).length()
 		var score: float = d * (0.4 + e.hull_integrity()) if focus_fire else d
-		if score < best_score:
+		if score < best_score - 0.001:
 			best_score = score
-			best = e
-	return best
+			tied = [e]
+		elif absf(score - best_score) <= 0.001:
+			tied.append(e)
+	if tied.size() == 1:
+		return tied[0]
+	# 同分时随机：否则"数组里靠前的目标"会变成隐形偏好，
+	# 在多舰混战里形成系统性偏差。
+	var r: RandomNumberGenerator = _rngs[ship.uid]
+	return tied[r.randi_range(0, tied.size() - 1)]
 
 func turn_toward(ship, target, dt: float) -> void:
 	var desired: Vector3 = (target.pos - ship.pos).normalized()
@@ -252,22 +287,25 @@ func pick_weapon_target(ship, comp, enemies: Array):
 
 func fire_laser(ship, comp, target) -> void:
 	stat_shots[ship.team] += 1
+	ship_shots[ship.uid] = ship_shots.get(ship.uid, 0) + 1
 	var d: float = (target.pos - ship.pos).length()
 	var band := range_band(d)
 	var acc: float = clampf(band_accuracy(band) * ship.accuracy(), 0.05, 0.98)
 	var from: Vector3 = ship.comp_world_pos(comp)
 
-	if rng.randf() > acc:
+	var r: RandomNumberGenerator = _rngs[ship.uid]
+
+	if r.randf() > acc:
 		# 打空：光束擦过目标旁边
 		var miss_pt: Vector3 = target.pos + Vector3(
-			rng.randf_range(-2.0, 2.0), rng.randf_range(-2.0, 2.0), rng.randf_range(-2.0, 2.0))
+			r.randf_range(-2.0, 2.0), r.randf_range(-2.0, 2.0), r.randf_range(-2.0, 2.0))
 		beams.append({"a": from, "b": miss_pt, "life": BEAM_LIFE, "team": ship.team, "hit": false})
 		return
 
-	var dmg: float = LASER_BASE_DAMAGE * band_damage(d) * rng.randf_range(0.85, 1.15)
+	var dmg: float = LASER_BASE_DAMAGE * band_damage(d) * r.randf_range(0.85, 1.15)
 	dmg *= (1.0 - target.damage_reduction())
 
-	var hit_comp = resolve_hit_compartment(ship, target, from)
+	var hit_comp = resolve_hit_compartment(ship, target, from, r)
 	if hit_comp == null:
 		return
 
@@ -275,9 +313,21 @@ func fire_laser(ship, comp, target) -> void:
 		"life": BEAM_LIFE, "team": ship.team, "hit": true})
 
 	var before: int = hit_comp.state
+	var was_breached: bool = hit_comp.breached
 	var dealt: float = hit_comp.take_damage(dmg)
 	stat_hits[ship.team] += 1
 	stat_damage[ship.team] += dealt
+	ship_dmg_dealt[ship.uid] = ship_dmg_dealt.get(ship.uid, 0.0) + dealt
+	ship_dmg_taken[target.uid] = ship_dmg_taken.get(target.uid, 0.0) + dealt
+
+	# 失压：船员被抛出（表现层会用这个位置生成飞出去的小人）
+	if hit_comp.breached and not was_breached:
+		ejections.append({
+			"pos": target.comp_world_pos(hit_comp),
+			"count": hit_comp.crew_max,
+			"team": target.team,
+			"t": t,
+		})
 
 	if hit_comp.state == Model.CompState.OFFLINE and before != Model.CompState.OFFLINE:
 		log_event("crit", "%s 的%s停转" % [target.ship_name, Model.comp_name(hit_comp.kind)],
@@ -291,14 +341,14 @@ func fire_laser(ship, comp, target) -> void:
 	if not target.alive():
 		log_event("kill", "%s 失去战斗力" % target.ship_name, target.team, target.uid)
 
-func resolve_hit_compartment(shooter, target, origin: Vector3):
+func resolve_hit_compartment(shooter, target, origin: Vector3, r: RandomNumberGenerator):
 	# 在"目标自身坐标系"里判定：谁的朝向最接近来袭方向，谁挨打。
 	# 这样构造上左右对称，不会因为两军朝向相反产生系统性偏差。
 	var to_target: Vector3 = (target.pos - origin).normalized()
 	var local_incoming: Vector3 = (target.basis().inverse() * (-to_target)).normalized()
 
 	# 小角度抖动：同一位置不会每次都命中同一个舱室
-	var jitter := deg_to_rad(rng.randf_range(-12.0, 12.0))
+	var jitter := deg_to_rad(r.randf_range(-12.0, 12.0))
 	local_incoming = local_incoming.rotated(Vector3.UP, jitter)
 
 	var best = null
@@ -331,7 +381,15 @@ func explode_magazine(ship, mag) -> void:
 		var adjacency: float = maxf(0.0, 1.0 - (d_theta / 180.0) * 0.7 - d_h * 0.3)
 		if adjacency <= 0.05:
 			continue
+		var was_breached: bool = c.breached
 		c.take_damage(base * adjacency)
+		if c.breached and not was_breached:
+			ejections.append({
+				"pos": ship.comp_world_pos(c),
+				"count": c.crew_max,
+				"team": ship.team,
+				"t": t,
+			})
 		if c.state == Model.CompState.OFFLINE:
 			log_event("crit", "殉爆波及%s，停转" % Model.comp_name(c.kind), ship.team, ship.uid)
 
@@ -344,6 +402,8 @@ func summary() -> Dictionary:
 		var survived := 0
 		var hull_sum := 0.0
 		var comps := {}
+		var crew_lost := 0
+		var crew_left := 0
 		for s in ships:
 			if s.team != team:
 				continue
@@ -351,6 +411,8 @@ func summary() -> Dictionary:
 			if s.alive():
 				survived += 1
 				hull_sum += s.hull_integrity()
+			crew_lost += s.crew_capacity() - s.crew_alive()
+			crew_left += s.crew_alive()
 			for c in s.compartments:
 				if c.state == Model.CompState.OFFLINE:
 					var n: String = Model.comp_name(c.kind)
@@ -361,6 +423,8 @@ func summary() -> Dictionary:
 			"lost": total - survived,
 			"avg_hull": hull_sum / maxf(1.0, float(survived)),
 			"comps": comps,
+			"crew_lost": crew_lost,
+			"crew_left": crew_left,
 		}
 	out["time"] = snappedf(t, 0.1)
 	out["winner"] = winner

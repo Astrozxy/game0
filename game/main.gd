@@ -4,7 +4,12 @@ extends Node
 var current: Node = null
 
 func _ready() -> void:
-	_show_builder()
+	# 默认：直接开打，打完自动下一局（不需要任何点击）。
+	# 想自己配船时用 --builder 启动。
+	if OS.get_cmdline_args().has("--builder"):
+		_show_builder()
+	else:
+		_on_launch(Model.default_loadout())
 
 func _clear() -> void:
 	if current != null:
@@ -27,4 +32,5 @@ func _on_launch(loadout: Array) -> void:
 	current = v
 
 func _on_finished(_summary: Dictionary) -> void:
-	_show_builder()
+	# 自动连播：一场打完直接开下一场，不用手动点。
+	_on_launch(Model.default_loadout())
