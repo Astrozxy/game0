@@ -18,11 +18,11 @@ enum CompState { ONLINE, DAMAGED, OFFLINE }
 enum CapType { AGGRESSIVE, STEADY, CAUTIOUS }
 
 const HULL_RADIUS := 1.45
-const SLOT_COUNT := 10
+const SLOT_COUNT := 16
 
 # 每种舱室的固有属性。第一版基线。
 # HP_SCALE 是全局血量系数：调这一个数就能整体加快/放慢战斗节奏。
-const HP_SCALE := 0.72
+const HP_SCALE := 1.55
 
 static func comp_max_hp(kind: int) -> float:
 	var base := 50.0
@@ -152,17 +152,24 @@ static func comp_color(kind: int) -> Color:
 
 # 舰体硬点：坐标是舰体局部坐标（+Z 舰首，+Y 上，+X 右），dir 是外法线。
 # 几何先定，舱位跟着舰体走——这是"军舰设计"而不是"圆环上摆格子"。
+# 16 个硬点按舰船分区布置：舰首、背脊、两舷、腹部、舰桥、引擎、弹药库。
 const HARDPOINTS: Array = [
-	[Vector3(0.0, 0.30, 3.55), Vector3(0, 0.15, 1)],    # 0 舰首主炮位
-	[Vector3(0.0, 0.80, 1.60), Vector3(0, 1, 0.15)],    # 1 背部炮塔 A
-	[Vector3(0.0, 0.80, -0.20), Vector3(0, 1, -0.10)],  # 2 背部炮塔 B
-	[Vector3(-1.30, 0.10, 0.90), Vector3(-1, 0, 0)],    # 3 左舷炮组
-	[Vector3(1.30, 0.10, 0.90), Vector3(1, 0, 0)],      # 4 右舷炮组
-	[Vector3(0.0, -0.70, 2.10), Vector3(0, -1, 0.20)],  # 5 腹部炮塔
-	[Vector3(0.0, 1.15, -1.50), Vector3(0, 1, 0)],      # 6 舰桥 / 传感器
-	[Vector3(-0.70, 0.0, -3.70), Vector3(0, 0, -1)],    # 7 左引擎组
-	[Vector3(0.70, 0.0, -3.70), Vector3(0, 0, -1)],     # 8 右引擎组
-	[Vector3(0.0, 0.20, -2.40), Vector3(0, 1, 0)],      # 9 弹药库
+	[Vector3(0.0, 0.25, 5.10), Vector3(0, 0.12, 1)],     # 0  舰首主炮
+	[Vector3(0.0, 0.62, 3.60), Vector3(0, 1, 0.25)],     # 1  前部炮塔
+	[Vector3(0.0, 0.86, 1.80), Vector3(0, 1, 0.10)],     # 2  背塔 A
+	[Vector3(0.0, 0.86, 0.10), Vector3(0, 1, 0)],        # 3  背塔 B
+	[Vector3(0.0, 0.86, -1.60), Vector3(0, 1, -0.10)],   # 4  背塔 C
+	[Vector3(-1.72, 0.05, 2.60), Vector3(-1, 0, 0)],     # 5  左舷炮组 A
+	[Vector3(-1.72, 0.05, 0.20), Vector3(-1, 0, 0)],     # 6  左舷炮组 B
+	[Vector3(1.72, 0.05, 2.60), Vector3(1, 0, 0)],       # 7  右舷炮组 A
+	[Vector3(1.72, 0.05, 0.20), Vector3(1, 0, 0)],       # 8  右舷炮组 B
+	[Vector3(0.0, -0.78, 2.40), Vector3(0, -1, 0.15)],   # 9  腹部炮塔 A
+	[Vector3(0.0, -0.78, -0.40), Vector3(0, -1, 0.05)],  # 10 腹部炮塔 B
+	[Vector3(0.0, 1.55, -2.20), Vector3(0, 1, 0)],       # 11 舰桥
+	[Vector3(0.0, 1.20, -3.60), Vector3(0, 1, 0)],       # 12 传感器阵列
+	[Vector3(-0.92, 0.0, -5.20), Vector3(0, 0, -1)],     # 13 左引擎组
+	[Vector3(0.92, 0.0, -5.20), Vector3(0, 0, -1)],      # 14 右引擎组
+	[Vector3(0.0, 0.30, -4.20), Vector3(0, 1, 0)],       # 15 弹药库
 ]
 
 static func hardpoint_pos(i: int) -> Vector3:
@@ -174,23 +181,31 @@ static func hardpoint_dir(i: int) -> Vector3:
 static func hardpoint_name(i: int) -> String:
 	match i:
 		0: return "舰首炮"
-		1: return "背塔A"
-		2: return "背塔B"
-		3: return "左舷"
-		4: return "右舷"
-		5: return "腹部"
-		6: return "舰桥"
-		7: return "引擎L"
-		8: return "引擎R"
-		9: return "弹药库"
+		1: return "前塔"
+		2: return "背塔A"
+		3: return "背塔B"
+		4: return "背塔C"
+		5: return "左舷A"
+		6: return "左舷B"
+		7: return "右舷A"
+		8: return "右舷B"
+		9: return "腹塔A"
+		10: return "腹塔B"
+		11: return "舰桥"
+		12: return "传感阵"
+		13: return "引擎L"
+		14: return "引擎R"
+		15: return "弹药库"
 	return "舱位"
 
-# 默认装配：舰首长程炮、背腹三座激光、两侧近防、舰桥传感器、双引擎、弹药库。
+# 默认装配：舰首长程炮、背脊三激光、两舷近防、腹塔护盾、舰桥传感器、双引擎、弹药库。
 static func default_loadout() -> Array:
 	return [
-		CompType.WEAPON_LONG, CompType.WEAPON, CompType.WEAPON,
+		CompType.WEAPON_LONG, CompType.WEAPON, CompType.WEAPON, CompType.WEAPON,
+		CompType.WEAPON, CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE,
 		CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE, CompType.SHIELD,
-		CompType.SENSOR, CompType.ENGINE, CompType.ENGINE, CompType.MAGAZINE,
+		CompType.SHIELD, CompType.SENSOR, CompType.CREW,
+		CompType.ENGINE, CompType.ENGINE, CompType.MAGAZINE,
 	]
 
 

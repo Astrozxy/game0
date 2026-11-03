@@ -34,7 +34,7 @@ var flying_crew: Array = []          # {node, vel, spin, life}
 var beam_mesh: ImmediateMesh
 
 var cam: Camera3D
-var cam_dist := 30.0
+var cam_dist := 58.0
 var cam_target := Vector3.ZERO
 var follow_uid := -1
 
@@ -59,8 +59,8 @@ func _setup_world() -> void:
 	add_child(cam)
 
 	var light := DirectionalLight3D.new()
-	light.rotation_degrees = Vector3(-55, -35, 0)
-	light.light_energy = 1.05
+	light.rotation_degrees = Vector3(-72, -18, 0)
+	light.light_energy = 1.15
 	add_child(light)
 
 	var env := WorldEnvironment.new()
@@ -158,50 +158,81 @@ func _build_hull(node: Node3D, ship) -> void:
 	var accent_mat := _metal(accent * 0.9, 0.30, 0.35)
 	accent_mat.emission_enabled = true
 	accent_mat.emission = accent * 0.55
+	var line_mat := _metal(Color(0.10, 0.11, 0.14), 0.6, 0.5)
+	var glow_mat := _emissive(Color(1.0, 0.90, 0.65), 0.7)
 
-	# 主装甲段（覆盖舰体中部，硬点都挂在它上面）
-	_add_box(node, Vector3(2.3, 0.95, 4.6), Vector3(0, 0, -0.3), hull_mat)
-	# 背脊
-	_add_box(node, Vector3(0.62, 0.32, 3.4), Vector3(0, 0.55, 0.2), plate_mat)
-	# 腹部装甲
-	_add_box(node, Vector3(1.35, 0.28, 3.6), Vector3(0, -0.50, 0.2), plate_mat)
+	# ---- 主装甲段（三层，形成厚度感）----
+	_add_box(node, Vector3(3.05, 1.05, 7.2), Vector3(0, 0, 0.1), hull_mat)
+	_add_box(node, Vector3(3.25, 0.55, 5.6), Vector3(0, 0.06, 0.3), plate_mat)
+	_add_box(node, Vector3(2.35, 0.42, 6.4), Vector3(0, -0.62, 0.2), plate_mat)
 
-	# 舰首：逐段收窄（两段锥体，比单一圆锥更像军舰）
-	var bow1 := _add_cyl(node, 0.62, 1.05, 1.5, Vector3(0, 0, 2.65), hull_mat, 6)
-	bow1.rotation_degrees = Vector3(-90, 0, 0)
-	var bow2 := _add_cyl(node, 0.10, 0.62, 1.6, Vector3(0, 0, 4.05), hull_mat, 6)
-	bow2.rotation_degrees = Vector3(-90, 0, 0)
+	# ---- 背脊与上层建筑 ----
+	_add_box(node, Vector3(0.95, 0.34, 5.4), Vector3(0, 0.66, -0.1), plate_mat)
+	_add_box(node, Vector3(0.55, 0.22, 4.2), Vector3(0, 0.84, -0.2), hull_mat)
+
+	# ---- 舰首：三段收窄 ----
+	var b1 := _add_cyl(node, 0.95, 1.42, 1.6, Vector3(0, 0, 4.30), hull_mat, 6)
+	b1.rotation_degrees = Vector3(-90, 0, 0)
+	var b2 := _add_cyl(node, 0.52, 0.95, 1.4, Vector3(0, 0, 5.40), hull_mat, 6)
+	b2.rotation_degrees = Vector3(-90, 0, 0)
+	var b3 := _add_cyl(node, 0.06, 0.52, 1.2, Vector3(0, 0, 6.30), hull_mat, 6)
+	b3.rotation_degrees = Vector3(-90, 0, 0)
 	# 舰首装甲脊
-	_add_box(node, Vector3(0.34, 0.22, 2.0), Vector3(0, 0.30, 3.1), plate_mat)
+	_add_box(node, Vector3(0.40, 0.24, 2.6), Vector3(0, 0.34, 4.60), plate_mat)
+	# 舰首侧棱
+	for sx in [-0.62, 0.62]:
+		var flank := _add_box(node, Vector3(0.12, 0.30, 2.0), Vector3(sx, 0.02, 4.40), plate_mat)
+		flank.rotation_degrees = Vector3(0, sx * 5.0, 0)
 
-	# 舰尾主体
-	_add_box(node, Vector3(2.0, 0.82, 2.0), Vector3(0, 0, -3.15), hull_mat)
-	_add_box(node, Vector3(1.2, 0.30, 1.4), Vector3(0, 0.46, -3.0), plate_mat)
+	# ---- 舰尾 ----
+	_add_box(node, Vector3(2.75, 0.95, 2.4), Vector3(0, 0, -4.20), hull_mat)
+	_add_box(node, Vector3(1.65, 0.34, 1.8), Vector3(0, 0.52, -4.10), plate_mat)
 
-	# 双引擎喷口（对应 7 / 8 号硬点）
-	for ex in [-0.70, 0.70]:
-		var noz := _add_cyl(node, 0.30, 0.36, 0.85, Vector3(ex, 0, -4.30),
+	# ---- 双引擎组（13 / 14 号硬点）----
+	for ex in [-0.92, 0.92]:
+		var housing := _add_box(node, Vector3(0.78, 0.72, 1.2), Vector3(ex, 0, -5.30), hull_mat)
+		var noz := _add_cyl(node, 0.30, 0.38, 0.9, Vector3(ex, 0, -5.95),
 			_metal(Color(0.10, 0.11, 0.13), 0.9, 0.25), 10)
 		noz.rotation_degrees = Vector3(90, 0, 0)
-		var glow := _add_cyl(node, 0.24, 0.24, 0.10, Vector3(ex, 0, -4.72), accent_mat, 10)
+		var glow := _add_cyl(node, 0.26, 0.26, 0.10, Vector3(ex, 0, -6.40), accent_mat, 10)
 		glow.rotation_degrees = Vector3(90, 0, 0)
 
-	# 舷侧识别灯带
-	for sx in [-1.17, 1.17]:
-		_add_box(node, Vector3(0.05, 0.09, 3.8), Vector3(sx, 0.04, 0.1), accent_mat)
+	# ---- 舷侧装甲带与灯带 ----
+	for sx in [-1.58, 1.58]:
+		_add_box(node, Vector3(0.14, 0.62, 5.2), Vector3(sx, -0.02, 0.9), plate_mat)
+		_add_box(node, Vector3(0.05, 0.08, 4.6), Vector3(sx * 1.02, 0.16, 0.6), accent_mat)
 
-	# 舰桥塔（6 号硬点下方）
-	_add_box(node, Vector3(0.72, 0.55, 1.05), Vector3(0, 0.86, -1.50), plate_mat)
-	_add_box(node, Vector3(0.46, 0.18, 0.70), Vector3(0, 1.16, -1.50), hull_mat)
-	_add_box(node, Vector3(0.30, 0.07, 0.50), Vector3(0, 1.27, -1.50), accent_mat)
-	# 舰桥舷窗
-	for wx in [-0.18, 0.0, 0.18]:
-		_add_box(node, Vector3(0.10, 0.06, 0.04), Vector3(wx, 1.02, -0.97),
-			_emissive(Color(1.0, 0.90, 0.65), 0.8))
+	# ---- 舰桥塔（11 号硬点）----
+	_add_box(node, Vector3(1.05, 0.55, 1.5), Vector3(0, 0.95, -2.20), plate_mat)
+	_add_box(node, Vector3(0.72, 0.42, 1.0), Vector3(0, 1.30, -2.20), hull_mat)
+	_add_box(node, Vector3(0.44, 0.16, 0.68), Vector3(0, 1.52, -2.20), accent_mat)
+	for wx in [-0.24, 0.0, 0.24]:
+		_add_box(node, Vector3(0.12, 0.07, 0.05), Vector3(wx, 1.18, -1.52), glow_mat)
 
-	# 舰体侧面装甲板（增加层次）
-	for sx in [-1.16, 1.16]:
-		_add_box(node, Vector3(0.10, 0.52, 2.4), Vector3(sx, -0.10, 1.4), plate_mat)
+	# ---- 传感器桅杆（12 号硬点）----
+	_add_box(node, Vector3(0.22, 0.55, 0.22), Vector3(0, 0.95, -3.60), plate_mat)
+	_add_box(node, Vector3(0.62, 0.08, 0.62), Vector3(0, 1.22, -3.60), hull_mat)
+	for ang in [0.0, 90.0, 180.0, 270.0]:
+		var strut := _add_box(node, Vector3(0.05, 0.05, 0.34), Vector3(0, 1.26, -3.60), plate_mat)
+		strut.rotation_degrees = Vector3(0, ang, 25)
+
+	# ---- 舷侧机库/舱段（增加体量层次）----
+	for sx in [-1.05, 1.05]:
+		_add_box(node, Vector3(0.55, 0.45, 2.0), Vector3(sx, 0.62, 0.6), plate_mat)
+		_add_box(node, Vector3(0.62, 0.06, 1.7), Vector3(sx, 0.86, 0.6), hull_mat)
+
+	# ---- 面板分割线（廉价但有效的"复杂度"）----
+	for i in 7:
+		var z := -4.0 + float(i) * 1.15
+		_add_box(node, Vector3(3.12, 0.03, 0.03), Vector3(0, 0.53, z), line_mat)
+	for i in 5:
+		var z2 := -3.0 + float(i) * 1.3
+		_add_box(node, Vector3(3.30, 0.03, 0.03), Vector3(0, 0.34, z2), line_mat)
+
+	# ---- 腹部装甲与散热片 ----
+	_add_box(node, Vector3(1.9, 0.16, 4.2), Vector3(0, -0.86, 0.4), plate_mat)
+	for i in 4:
+		_add_box(node, Vector3(1.4, 0.22, 0.10), Vector3(0, -0.96, -1.2 + float(i) * 0.9), line_mat)
 
 # ---------------------------------------------------------------- 舱室
 #
@@ -220,7 +251,7 @@ func _build_pod(node: Node3D, ship, comp) -> void:
 	base_mat.emission = type_col * 0.10
 
 	# 模块本体（朝外的一侧略厚）
-	_add_box(pod, Vector3(0.78, 0.62, 0.86), Vector3.ZERO, base_mat)
+	_add_box(pod, Vector3(0.60, 0.46, 0.66), Vector3.ZERO, base_mat)
 
 	var detail_mat := _metal(type_col.darkened(0.25), 0.55, 0.35)
 

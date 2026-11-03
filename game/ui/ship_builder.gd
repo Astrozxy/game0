@@ -36,9 +36,9 @@ func _ready() -> void:
 func _build_ui() -> void:
 	var W: float = size.x
 	var H: float = size.y
-	slot_size = clampf(minf(W, H) * 0.072, 48.0, 78.0)
-	center_pos = Vector2(W * 0.28, H * 0.52)
-	hp_scale = minf(W, H) * 0.044
+	slot_size = clampf(minf(W, H) * 0.050, 32.0, 48.0)
+	center_pos = Vector2(W * 0.27, H * 0.53)
+	hp_scale = minf(W, H) * 0.037
 
 	var bg := ColorRect.new()
 	bg.color = Color(0.04, 0.05, 0.07)
@@ -257,9 +257,11 @@ func _panel_style() -> StyleBoxFlat:
 func _draw() -> void:
 	# 舰体俯视轮廓：上方舰首，下方舰尾
 	var outline: Array = [
-		Vector2(0.0, 4.9), Vector2(0.55, 3.4), Vector2(1.02, 2.3),
-		Vector2(1.18, -3.4), Vector2(0.92, -4.5), Vector2(-0.92, -4.5),
-		Vector2(-1.18, -3.4), Vector2(-1.02, 2.3), Vector2(-0.55, 3.4),
+		Vector2(0.0, 6.4), Vector2(0.40, 5.4), Vector2(0.95, 4.4),
+		Vector2(1.35, 3.2), Vector2(1.62, 1.0), Vector2(1.55, -3.6),
+		Vector2(1.10, -5.4), Vector2(-1.10, -5.4), Vector2(-1.55, -3.6),
+		Vector2(-1.62, 1.0), Vector2(-1.35, 3.2), Vector2(-0.95, 4.4),
+		Vector2(-0.40, 5.4),
 	]
 	var pts: PackedVector2Array = PackedVector2Array()
 	for p in outline:
