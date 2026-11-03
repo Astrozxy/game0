@@ -35,6 +35,7 @@ var crew_mm: MultiMesh = null
 var crew_mm_node: MultiMeshInstance3D = null
 var turret_nodes: Dictionary = {}    # "uid:index" -> 可旋转的炮塔节点
 var turret_pods: Dictionary = {}     # "uid:index" -> 炮塔所在的 pod（用于换算朝向）
+var ship_mats: Dictionary = {}       # uid -> 共用材质集
 var beam_mesh: ImmediateMesh
 
 var cam: Camera3D
@@ -63,7 +64,7 @@ func _ready() -> void:
 				follow_uid = s.uid
 				cam_target = s.pos
 				break
-		cam_dist = 13.0
+		cam_dist = 8.0
 	_apply_camera()
 
 func _setup_world() -> void:
@@ -246,118 +247,322 @@ func _build_hull(node: Node3D, ship) -> void:
 	for i in 4:
 		_add_box(node, Vector3(1.4, 0.22, 0.10), Vector3(0, -0.96, -1.2 + float(i) * 0.9), line_mat)
 
+	_build_hull_greebles(node, ship)
+
+## 船体表面细节：零散设备箱、航行灯、天线。打破大块平板的玩具感。
+func _build_hull_greebles(node: Node3D, ship) -> void:
+	var mats := _mats_for(ship)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash("greeble:%d" % ship.uid)
+	var placed := 0
+	var tries := 0
+	while placed < 26 and tries < 240:
+		tries += 1
+		var z := rng.randf_range(-4.2, 4.2)
+		var half := 1.35
+		if z > 3.0:
+			half = lerpf(1.35, 0.30, clampf((z - 3.0) / 1.8, 0.0, 1.0))
+		elif z < -3.8:
+			half = lerpf(1.35, 0.90, clampf((-z - 3.8) / 0.9, 0.0, 1.0))
+		var x := rng.randf_range(-half, half)
+		var p := Vector3(x, 0.54, z)
+		var ok := true
+		for hp in Model.HARDPOINTS:
+			if (p - hp[0]).length() < 0.95:
+				ok = false
+				break
+		if not ok:
+			continue
+		var sz := Vector3(rng.randf_range(0.08, 0.22), rng.randf_range(0.03, 0.12), rng.randf_range(0.08, 0.26))
+		_add_box(node, sz, p, mats["plate"] if rng.randf() < 0.6 else mats["detail"])
+		placed += 1
+	# 舷侧航行灯
+	for i in 7:
+		var zz := -3.6 + float(i) * 1.15
+		for sx in [-1.46, 1.46]:
+			_add_box(node, Vector3(0.05, 0.05, 0.05), Vector3(sx, 0.22, zz), mats["glow"])
+	# 天线
+	for i in 3:
+		var zz2 := -1.0 + float(i) * 1.6
+		_add_box(node, Vector3(0.018, 0.52, 0.018), Vector3(1.02, 0.78, zz2), mats["detail"])
+
 # ---------------------------------------------------------------- 舱室
 #
 # 舱室是外挂的装甲模块：本体 + 按类型不同的功能件（炮塔/喷口/护盾环/天线）。
 
-func _build_pod(node: Node3D, ship, comp) -> void:
+## 每艘船共用一套材质，避免每个舱室都新建材质（省显存、利于合批）
+func _mats_for(ship) -> Dictionary:
+	if ship_mats.has(ship.uid):
+		return ship_mats[ship.uid]
 	var accent := _team_accent(ship.team)
+	var d := {
+		"hull": _metal(Color(0.17, 0.19, 0.23).lerp(accent, 0.08), 0.55, 0.48),
+		"plate": _metal(Color(0.25, 0.28, 0.33).lerp(accent, 0.10), 0.50, 0.55),
+		"detail": _metal(Color(0.34, 0.37, 0.42), 0.55, 0.42),
+		"dark": _metal(Color(0.09, 0.10, 0.12), 0.60, 0.50),
+		"accent": _emissive(accent, 0.9),
+		"glow": _emissive(Color(1.0, 0.92, 0.70), 0.85),
+		"glass": _glass(accent),
+		"warn": _metal(Color(0.82, 0.62, 0.14), 0.35, 0.55),
+	}
+	ship_mats[ship.uid] = d
+	return d
+
+## 玻璃质感：半透明 + 强自发光 + 极低粗糙度，看起来像发光的透镜
+func _glass(c: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(c.r, c.g, c.b, 0.55)
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.metallic = 0.05
+	m.roughness = 0.06
+	m.emission_enabled = true
+	m.emission = c * 1.5
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return m
+
+func _add_torus(parent: Node3D, inner: float, outer: float, pos: Vector3,
+		mat: Material, rot_deg: Vector3) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var t := TorusMesh.new()
+	t.inner_radius = inner
+	t.outer_radius = outer
+	t.rings = 14
+	t.ring_segments = 8
+	mi.mesh = t
+	mi.position = pos
+	mi.rotation_degrees = rot_deg
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi
+
+# ---------------------------------------------------------------- 舱室
+#
+# 舱室是外挂的装甲模块：通用底座 + 按类型完全不同的功能件。
+# 目标是"能看出里面在干什么"，这样后面才能做对应的击中效果。
+
+func _build_pod(node: Node3D, ship, comp) -> void:
+	var mats := _mats_for(ship)
 	var type_col := Model.comp_color(comp.kind)
 	var pod := Node3D.new()
 	pod.position = comp.local_pos
 	pod.transform.basis = _basis_from_dir(comp.dir)
 	node.add_child(pod)
 
-	var base_mat := _metal(Color(0.28, 0.31, 0.37).lerp(type_col, 0.30), 0.82, 0.32)
-	base_mat.emission_enabled = true
-	base_mat.emission = type_col * 0.10
-
-	# 模块本体（朝外的一侧略厚）
-	_add_box(pod, Vector3(0.60, 0.46, 0.66), Vector3.ZERO, base_mat)
-
-	var detail_mat := _metal(type_col.darkened(0.25), 0.55, 0.35)
+	# 通用底座：装甲框 + 四角螺栓
+	var base_mat := _metal(Color(0.24, 0.27, 0.32).lerp(type_col, 0.16), 0.62, 0.45)
+	_add_box(pod, Vector3(0.64, 0.42, 0.70), Vector3.ZERO, base_mat)
+	_add_box(pod, Vector3(0.72, 0.09, 0.78), Vector3(0, -0.17, 0), mats["plate"])
+	for bx in [-0.26, 0.26]:
+		for bz in [-0.29, 0.29]:
+			_add_cyl(pod, 0.028, 0.028, 0.05, Vector3(bx, 0.22, bz), mats["detail"], 6)
 
 	match comp.kind:
 		Model.CompType.WEAPON, Model.CompType.WEAPON_LONG, Model.CompType.WEAPON_CLOSE:
-			var yaw := _build_turret(pod, comp.kind, detail_mat, _emissive(accent))
+			var yaw := _build_turret(pod, comp.kind, mats)
 			var key := "%d:%d" % [ship.uid, comp.index]
 			turret_nodes[key] = yaw
 			turret_pods[key] = pod
 		Model.CompType.ENGINE:
-			var noz := _add_cyl(pod, 0.22, 0.28, 0.42, Vector3(0, 0, -0.45), detail_mat, 10)
-			noz.rotation_degrees = Vector3(90, 0, 0)
-			var gl := _add_cyl(pod, 0.16, 0.16, 0.06, Vector3(0, 0, -0.68), _emissive(accent), 10)
-			gl.rotation_degrees = Vector3(90, 0, 0)
+			_build_reactor(pod, mats)
 		Model.CompType.SHIELD:
-			var ring := MeshInstance3D.new()
-			var torus := TorusMesh.new()
-			torus.inner_radius = 0.30
-			torus.outer_radius = 0.42
-			ring.mesh = torus
-			ring.position = Vector3(0, 0.42, 0)
-			ring.rotation_degrees = Vector3(90, 0, 0)
-			ring.material_override = _emissive(type_col)
-			pod.add_child(ring)
+			_build_shield_emitter(pod, mats, type_col)
 		Model.CompType.SENSOR:
-			var dish := _add_cyl(pod, 0.28, 0.08, 0.16, Vector3(0, 0.42, 0), _metal(Color(0.55, 0.60, 0.66), 0.6, 0.4), 12)
-			dish.rotation_degrees = Vector3(0, 0, 0)
-			_add_box(pod, Vector3(0.04, 0.45, 0.04), Vector3(0.18, 0.55, 0), detail_mat)
+			_build_sensor_array(pod, mats)
 		Model.CompType.CREW:
-			for wx in [-0.22, 0.0, 0.22]:
-				_add_box(pod, Vector3(0.10, 0.06, 0.03), Vector3(wx, 0.16, 0.45),
-					_emissive(Color(1.0, 0.92, 0.70)))
+			_build_quarters(pod, mats)
 		Model.CompType.MAGAZINE:
-			_add_box(pod, Vector3(0.84, 0.20, 0.92), Vector3(0, 0.30, 0), detail_mat)
-			_add_box(pod, Vector3(0.30, 0.10, 0.30), Vector3(0, 0.44, 0), _emissive(Color(1.0, 0.72, 0.25)))
+			_build_magazine(pod, mats)
 
 	comp_mats["%d:%d" % [ship.uid, comp.index]] = base_mat
 
-## 炮塔：三种武器三种形态，并且可以绕安装面旋转跟踪目标。
+# ---------------------------------------------------------------- 各类型功能件
+
+## 聚变堆：发光环 + 约束环 + 支架 + 冷却管路 + 喷口
+func _build_reactor(pod: Node3D, mats: Dictionary) -> void:
+	var core_col := Color(0.42, 0.86, 1.0)
+	var core_mat := _emissive(core_col, 1.3)
+	# 主环（轴向沿 Z）
+	_add_torus(pod, 0.15, 0.29, Vector3(0, 0.26, 0), core_mat, Vector3(90, 0, 0))
+	_add_cyl(pod, 0.09, 0.09, 0.34, Vector3(0, 0.26, 0), _emissive(core_col, 0.65), 10)
+	# 约束环
+	for z in [-0.19, 0.19]:
+		_add_torus(pod, 0.30, 0.35, Vector3(0, 0.26, z), mats["detail"], Vector3(90, 0, 0))
+	# 支架
+	for a in [0.0, 90.0, 180.0, 270.0]:
+		var r := deg_to_rad(a)
+		_add_box(pod, Vector3(0.05, 0.07, 0.46), Vector3(cos(r) * 0.33, 0.26, 0), mats["detail"]).rotation_degrees = Vector3(0, a, 0)
+	# 冷却管路
+	for sx in [-0.24, 0.24]:
+		_add_box(pod, Vector3(0.055, 0.055, 0.52), Vector3(sx, 0.08, 0), mats["plate"])
+		_add_cyl(pod, 0.05, 0.05, 0.10, Vector3(sx, 0.08, 0.24), mats["detail"], 8).rotation_degrees = Vector3(90, 0, 0)
+	# 尾部喷口
+	var noz := _add_cyl(pod, 0.20, 0.26, 0.34, Vector3(0, 0.0, -0.46), mats["dark"], 12)
+	noz.rotation_degrees = Vector3(90, 0, 0)
+	_add_cyl(pod, 0.16, 0.16, 0.05, Vector3(0, 0.0, -0.64), mats["accent"], 12).rotation_degrees = Vector3(90, 0, 0)
+
+## 护盾发射器：大环 + 三块聚焦晶体 + 能量导管
+func _build_shield_emitter(pod: Node3D, mats: Dictionary, col: Color) -> void:
+	var cs := _emissive(col, 1.1)
+	_add_torus(pod, 0.22, 0.34, Vector3(0, 0.34, 0), cs, Vector3(90, 0, 0))
+	_add_torus(pod, 0.12, 0.16, Vector3(0, 0.34, 0.12), cs, Vector3(90, 0, 0))
+	# 聚焦晶体（斜置的小方柱）
+	for a in [0.0, 120.0, 240.0]:
+		var r := deg_to_rad(a)
+		var cx := cos(r) * 0.26
+		var cy := sin(r) * 0.26 + 0.34
+		var cr := _add_box(pod, Vector3(0.06, 0.16, 0.06), Vector3(cx, cy, 0), cs)
+		cr.rotation_degrees = Vector3(0, a, 28)
+	# 能量导管
+	for sx in [-0.22, 0.22]:
+		_add_box(pod, Vector3(0.05, 0.30, 0.05), Vector3(sx, 0.14, 0), mats["plate"])
+
+## 传感器阵列：抛物面 + 两根天线 + 相控阵面板（带发光阵元）
+func _build_sensor_array(pod: Node3D, mats: Dictionary) -> void:
+	var dish := _add_cyl(pod, 0.26, 0.08, 0.14, Vector3(0, 0.36, 0), mats["detail"], 14)
+	dish.rotation_degrees = Vector3(0, 0, 0)
+	_add_cyl(pod, 0.04, 0.04, 0.22, Vector3(0, 0.22, 0), mats["plate"], 8)
+	# 天线
+	for sx in [-0.20, 0.20]:
+		_add_box(pod, Vector3(0.015, 0.34, 0.015), Vector3(sx, 0.50, -0.10), mats["detail"])
+		_add_box(pod, Vector3(0.10, 0.012, 0.012), Vector3(sx, 0.66, -0.10), mats["detail"])
+	# 相控阵面板：一排微小发光阵元
+	_add_box(pod, Vector3(0.34, 0.10, 0.04), Vector3(0, 0.20, 0.30), mats["plate"])
+	for i in 4:
+		_add_box(pod, Vector3(0.05, 0.05, 0.02), Vector3(-0.12 + float(i) * 0.08, 0.20, 0.33), mats["glow"])
+
+## 人员舱：上下铺 + 餐桌 + 储物柜 + 舷窗
+func _build_quarters(pod: Node3D, mats: Dictionary) -> void:
+	# 甲板凹槽
+	_add_box(pod, Vector3(0.52, 0.05, 0.58), Vector3(0, 0.22, 0), mats["dark"])
+	# 两排上下铺
+	for row in 2:
+		var z := -0.16 + float(row) * 0.32
+		for col in 2:
+			var x := -0.13 + float(col) * 0.26
+			# 上层铺
+			_add_box(pod, Vector3(0.18, 0.03, 0.20), Vector3(x, 0.34, z), mats["plate"])
+			_add_box(pod, Vector3(0.16, 0.035, 0.17), Vector3(x, 0.36, z), _emissive(Color(0.45, 0.55, 0.75), 0.25))
+			# 下层铺
+			_add_box(pod, Vector3(0.18, 0.03, 0.20), Vector3(x, 0.26, z), mats["plate"])
+			_add_box(pod, Vector3(0.16, 0.035, 0.17), Vector3(x, 0.28, z), _emissive(Color(0.45, 0.55, 0.75), 0.25))
+			# 铺位立柱
+			_add_box(pod, Vector3(0.02, 0.20, 0.02), Vector3(x - 0.09, 0.30, z + 0.10), mats["detail"])
+	# 餐桌 + 长凳
+	_add_box(pod, Vector3(0.26, 0.03, 0.14), Vector3(0, 0.30, 0.06), mats["detail"])
+	_add_box(pod, Vector3(0.24, 0.02, 0.05), Vector3(0, 0.26, 0.16), mats["plate"])
+	_add_box(pod, Vector3(0.24, 0.02, 0.05), Vector3(0, 0.26, -0.04), mats["plate"])
+	# 储物柜
+	_add_box(pod, Vector3(0.10, 0.20, 0.28), Vector3(-0.23, 0.30, 0), mats["plate"])
+	# 舷窗
+	for i in 3:
+		_add_box(pod, Vector3(0.05, 0.05, 0.02), Vector3(-0.16 + float(i) * 0.16, 0.30, 0.33), mats["glow"])
+
+## 弹药库：装甲舱门 + 警示条 + 吊装轨道 + 弹药箱
+func _build_magazine(pod: Node3D, mats: Dictionary) -> void:
+	# 装甲舱门
+	_add_box(pod, Vector3(0.50, 0.20, 0.54), Vector3(0, 0.30, 0), mats["plate"])
+	_add_box(pod, Vector3(0.42, 0.04, 0.46), Vector3(0, 0.44, 0), mats["warn"])
+	# 吊装轨道与吊钩
+	_add_box(pod, Vector3(0.04, 0.04, 0.60), Vector3(0.22, 0.50, 0), mats["detail"])
+	_add_box(pod, Vector3(0.02, 0.10, 0.02), Vector3(0.16, 0.44, 0.10), mats["detail"])
+	# 弹药箱
+	for i in 3:
+		_add_box(pod, Vector3(0.12, 0.10, 0.12), Vector3(-0.16 + float(i) * 0.14, 0.26, -0.18), mats["warn"])
+	# 危险标识灯
+	_add_box(pod, Vector3(0.05, 0.05, 0.05), Vector3(0, 0.50, 0.24), _emissive(Color(1.0, 0.35, 0.2), 1.0))
+
+# ---------------------------------------------------------------- 炮塔
+
+## 炮塔：三种武器三种形态，可绕安装面旋转跟踪目标。
 ## 结构：pod（+Z = 外法线）→ yaw（绕 +Z 旋转）→ inner（-90°X，让炮管沿 +Y）
-## 因此 yaw.rotation.z 就是"水平扫射"。
-func _build_turret(pod: Node3D, kind: int, mat: StandardMaterial3D, glow: StandardMaterial3D) -> Node3D:
-	# 通用：不动的环形炮座
-	_add_cyl(pod, 0.28, 0.32, 0.10, Vector3(0, 0.30, 0), mat, 12)
+func _build_turret(pod: Node3D, kind: int, mats: Dictionary) -> Node3D:
+	_add_cyl(pod, 0.28, 0.32, 0.10, Vector3(0, 0.28, 0), mats["detail"], 12)
 
 	var yaw := Node3D.new()
-	yaw.position = Vector3(0, 0.38, 0)
+	yaw.position = Vector3(0, 0.36, 0)
 	pod.add_child(yaw)
 
 	var inner := Node3D.new()
 	inner.rotation_degrees = Vector3(-90, 0, 0)
 	yaw.add_child(inner)
 
-	_add_box(inner, Vector3(0.44, 0.20, 0.42), Vector3.ZERO, mat)
-
 	match kind:
 		Model.CompType.WEAPON_LONG:
-			# 双联重炮
-			for sx in [-0.12, 0.12]:
-				_add_box(inner, Vector3(0.085, 0.085, 1.30), Vector3(sx, 0.04, 0.60), mat)
-				_add_box(inner, Vector3(0.13, 0.13, 0.16), Vector3(sx, 0.04, 1.26), mat)
-				_add_box(inner, Vector3(0.16, 0.16, 0.10), Vector3(sx, 0.04, 1.36), mat)
-			# 后座与俯仰轴
-			_add_box(inner, Vector3(0.34, 0.12, 0.24), Vector3(0, 0.15, -0.06), mat)
-			# 供弹臂
-			for sx2 in [-0.26, 0.26]:
-				_add_box(inner, Vector3(0.06, 0.10, 0.34), Vector3(sx2, -0.04, -0.12), mat)
-
+			_build_cannon_turret(inner, mats)
 		Model.CompType.WEAPON_CLOSE:
-			# 六管加特林
-			for i in 6:
-				var ang := TAU * float(i) / 6.0
-				var px := cos(ang) * 0.052
-				var py := sin(ang) * 0.052
-				_add_box(inner, Vector3(0.026, 0.026, 0.66), Vector3(px, 0.04 + py, 0.38), mat)
-			_add_cyl(inner, 0.11, 0.11, 0.14, Vector3(0, 0.04, 0.14), mat, 10).rotation_degrees = Vector3(-90, 0, 0)
-			# 顶部跟踪雷达
-			_add_box(inner, Vector3(0.02, 0.16, 0.02), Vector3(0, 0.20, -0.10), mat)
-			_add_box(inner, Vector3(0.13, 0.03, 0.09), Vector3(0, 0.28, -0.10), mat)
-
+			_build_gatling_turret(inner, mats)
 		_:
-			# 单管激光
-			var barrel := _add_cyl(inner, 0.042, 0.058, 0.98, Vector3(0, 0.04, 0.52), mat, 8)
-			barrel.rotation_degrees = Vector3(-90, 0, 0)
-			var tip := _add_cyl(inner, 0.072, 0.072, 0.05, Vector3(0, 0.04, 1.01), glow, 8)
-			tip.rotation_degrees = Vector3(-90, 0, 0)
-			# 冷却鳍片
-			for i in 3:
-				_add_box(inner, Vector3(0.16, 0.03, 0.10), Vector3(0, 0.10 + float(i) * 0.035, 0.18 + float(i) * 0.10), mat)
-			# 侧向配重
-			for sx3 in [-0.20, 0.20]:
-				_add_box(inner, Vector3(0.05, 0.12, 0.26), Vector3(sx3, 0.0, 0.04), mat)
+			_build_laser_turret(inner, mats)
 
 	return yaw
+
+## 激光炮塔：细长炮管 + 玻璃透镜 + 冷却鳍 + 供能导管
+func _build_laser_turret(inner: Node3D, mats: Dictionary) -> void:
+	# 炮塔壳体
+	_add_box(inner, Vector3(0.44, 0.20, 0.42), Vector3(0, 0.04, 0), mats["plate"])
+	# 炮管
+	var barrel := _add_cyl(inner, 0.040, 0.058, 0.92, Vector3(0, 0.04, 0.52), mats["detail"], 10)
+	barrel.rotation_degrees = Vector3(-90, 0, 0)
+	# 透镜座
+	var housing := _add_cyl(inner, 0.11, 0.09, 0.16, Vector3(0, 0.04, 1.02), mats["detail"], 12)
+	housing.rotation_degrees = Vector3(-90, 0, 0)
+	# 玻璃透镜（核心细节）
+	var lens := _add_cyl(inner, 0.085, 0.085, 0.03, Vector3(0, 0.04, 1.11), mats["glass"], 14)
+	lens.rotation_degrees = Vector3(-90, 0, 0)
+	# 透镜环
+	_add_torus(inner, 0.085, 0.115, Vector3(0, 0.04, 1.09), mats["accent"], Vector3(90, 0, 0))
+	# 冷却鳍片
+	for i in 4:
+		_add_box(inner, Vector3(0.20, 0.02, 0.08), Vector3(0, 0.14 + float(i) * 0.03, 0.22 + float(i) * 0.12), mats["detail"])
+	# 供能导管
+	_add_box(inner, Vector3(0.05, 0.05, 0.34), Vector3(0.20, 0.02, 0.02), mats["plate"])
+	# 观瞄镜
+	_add_box(inner, Vector3(0.05, 0.06, 0.10), Vector3(-0.16, 0.16, 0.34), mats["dark"])
+
+## 火炮塔：双联炮管 + 自动装填弹鼓 + 输弹槽 + 后座
+func _build_cannon_turret(inner: Node3D, mats: Dictionary) -> void:
+	# 炮塔壳体
+	_add_box(inner, Vector3(0.50, 0.22, 0.46), Vector3(0, 0.04, 0), mats["plate"])
+	# 双联炮管
+	for sx in [-0.12, 0.12]:
+		_add_box(inner, Vector3(0.085, 0.085, 1.20), Vector3(sx, 0.04, 0.58), mats["detail"])
+		_add_box(inner, Vector3(0.13, 0.13, 0.16), Vector3(sx, 0.04, 1.18), mats["detail"])
+		_add_box(inner, Vector3(0.16, 0.16, 0.10), Vector3(sx, 0.04, 1.28), mats["detail"])
+		# 后座筒
+		_add_cyl(inner, 0.045, 0.045, 0.26, Vector3(sx, 0.16, 0.10), mats["detail"], 8).rotation_degrees = Vector3(-90, 0, 0)
+	# 炮闩
+	_add_box(inner, Vector3(0.40, 0.24, 0.22), Vector3(0, 0.04, -0.16), mats["dark"])
+	# 自动装填弹鼓（竖置，露出弹头）
+	var drum := _add_cyl(inner, 0.16, 0.16, 0.16, Vector3(-0.30, 0.04, -0.20), mats["plate"], 12)
+	drum.rotation_degrees = Vector3(0, 0, 90)
+	for i in 6:
+		var a := TAU * float(i) / 6.0
+		var py := cos(a) * 0.11
+		var pz := sin(a) * 0.11
+		_add_cyl(inner, 0.018, 0.018, 0.05, Vector3(-0.39, 0.04 + py, -0.20 + pz), mats["warn"], 6).rotation_degrees = Vector3(0, 0, 90)
+	# 输弹槽：从弹鼓通向炮闩
+	_add_box(inner, Vector3(0.06, 0.10, 0.22), Vector3(-0.18, 0.04, -0.16), mats["detail"])
+	# 俯仰耳轴
+	_add_cyl(inner, 0.05, 0.05, 0.46, Vector3(0, 0.06, -0.02), mats["detail"], 8).rotation_degrees = Vector3(0, 0, 90)
+
+## 近防炮塔：六管加特林 + 弹箱 + 弹链 + 跟踪雷达
+func _build_gatling_turret(inner: Node3D, mats: Dictionary) -> void:
+	_add_box(inner, Vector3(0.36, 0.18, 0.34), Vector3(0, 0.04, 0), mats["plate"])
+	# 六管
+	for i in 6:
+		var a := TAU * float(i) / 6.0
+		var px := cos(a) * 0.050
+		var py := sin(a) * 0.050
+		_add_box(inner, Vector3(0.024, 0.024, 0.62), Vector3(px, 0.04 + py, 0.36), mats["detail"])
+	# 旋转鼓
+	_add_cyl(inner, 0.105, 0.105, 0.14, Vector3(0, 0.04, 0.12), mats["dark"], 10).rotation_degrees = Vector3(-90, 0, 0)
+	# 弹箱与弹链
+	_add_box(inner, Vector3(0.16, 0.14, 0.20), Vector3(-0.24, 0.02, -0.10), mats["warn"])
+	for i in 5:
+		_add_box(inner, Vector3(0.02, 0.02, 0.03), Vector3(-0.15 + float(i) * 0.025, 0.06, -0.06), mats["detail"])
+	# 跟踪雷达
+	_add_box(inner, Vector3(0.018, 0.14, 0.018), Vector3(0.14, 0.16, -0.12), mats["detail"])
+	_add_box(inner, Vector3(0.10, 0.025, 0.07), Vector3(0.14, 0.23, -0.12), mats["detail"])
 
 ## 炮塔跟踪最近的目标。纯表现层，不影响命中判定。
 func _update_turrets(delta: float) -> void:
@@ -443,8 +648,8 @@ func _build_crew_multimesh() -> void:
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = true
 	var cap := CapsuleMesh.new()
-	cap.radius = 0.042
-	cap.height = 0.20
+	cap.radius = 0.030
+	cap.height = 0.13
 	cap.radial_segments = 6
 	cap.rings = 2
 	mm.mesh = cap
