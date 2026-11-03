@@ -12,8 +12,8 @@ signal finished(summary: Dictionary)
 
 const FIXED_DT := 0.05
 const SHIPS_PER_SIDE := 6
-const CREW_PER_SHIP := 18
-const CREW_SPEED := 2.4
+const CREW_PER_SHIP := 26
+const CREW_SPEED := 2.9
 const MIN_DIST := 16.0
 const MAX_DIST := 150.0
 
@@ -312,7 +312,7 @@ func _emissive(c: Color, strength := 0.9) -> StandardMaterial3D:
 	m.roughness = 0.4
 	return m
 
-## 船员小人：身体 + 头 + 背包。不做布娃娃物理，只做动作。
+## 船员小人：身体 + 头 + 背包。巨舰尺度下很小，只有拉近才看得清。
 func _make_crew_figure(team: String) -> Node3D:
 	var root := Node3D.new()
 	var skin := Color(0.86, 0.93, 1.0) if team == "player" else Color(1.0, 0.87, 0.83)
@@ -322,27 +322,27 @@ func _make_crew_figure(team: String) -> Node3D:
 
 	var body := MeshInstance3D.new()
 	var cap := CapsuleMesh.new()
-	cap.radius = 0.062
-	cap.height = 0.30
+	cap.radius = 0.038
+	cap.height = 0.19
 	body.mesh = cap
-	body.position.y = 0.15
+	body.position.y = 0.095
 	body.material_override = suit
 	root.add_child(body)
 
 	var head := MeshInstance3D.new()
 	var sph := SphereMesh.new()
-	sph.radius = 0.052
-	sph.height = 0.104
+	sph.radius = 0.032
+	sph.height = 0.064
 	head.mesh = sph
-	head.position.y = 0.34
+	head.position.y = 0.215
 	head.material_override = _emissive(Color(0.95, 0.95, 0.98), 0.35)
 	root.add_child(head)
 
 	var pack := MeshInstance3D.new()
 	var pb := BoxMesh.new()
-	pb.size = Vector3(0.075, 0.10, 0.045)
+	pb.size = Vector3(0.048, 0.065, 0.028)
 	pack.mesh = pb
-	pack.position = Vector3(0, 0.18, -0.055)
+	pack.position = Vector3(0, 0.115, -0.034)
 	pack.material_override = _metal(Color(0.30, 0.32, 0.37), 0.4, 0.6)
 	root.add_child(pack)
 
