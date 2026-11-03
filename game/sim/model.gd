@@ -8,7 +8,12 @@ extends RefCounted
 ## - 舱室有独立生命值，受损降效，归零停转。
 ## - 损管有预算，战斗中缓慢修复。
 
-enum CompType { WEAPON, MAGAZINE, CREW, ENGINE, SHIELD, SENSOR }
+enum CompType {
+	WEAPON,        # 激光：中近程、全能、稳定
+	WEAPON_LONG,   # 长程炮：远射程、单发高、近距离打不了
+	WEAPON_CLOSE,  # 近防炮：极近距离、射速快
+	MAGAZINE, CREW, ENGINE, SHIELD, SENSOR,
+}
 enum CompState { ONLINE, DAMAGED, OFFLINE }
 enum CapType { AGGRESSIVE, STEADY, CAUTIOUS }
 
@@ -16,19 +21,27 @@ const HULL_RADIUS := 1.15
 const SLOT_COUNT := 10
 
 # 每种舱室的固有属性。第一版基线。
+# HP_SCALE 是全局血量系数：调这一个数就能整体加快/放慢战斗节奏。
+const HP_SCALE := 0.72
+
 static func comp_max_hp(kind: int) -> float:
+	var base := 50.0
 	match kind:
-		CompType.WEAPON:   return 60.0
-		CompType.MAGAZINE: return 45.0
-		CompType.CREW:     return 40.0
-		CompType.ENGINE:   return 70.0
-		CompType.SHIELD:   return 55.0
-		CompType.SENSOR:   return 35.0
-	return 50.0
+		CompType.WEAPON:       base = 60.0
+		CompType.WEAPON_LONG:  base = 70.0
+		CompType.WEAPON_CLOSE: base = 50.0
+		CompType.MAGAZINE:     base = 45.0
+		CompType.CREW:         base = 40.0
+		CompType.ENGINE:       base = 70.0
+		CompType.SHIELD:       base = 55.0
+		CompType.SENSOR:       base = 35.0
+	return base * HP_SCALE
 
 static func comp_armor(kind: int) -> float:
 	match kind:
-		CompType.WEAPON:   return 2.0
+		CompType.WEAPON:       return 2.0
+		CompType.WEAPON_LONG:  return 3.0
+		CompType.WEAPON_CLOSE: return 1.0
 		CompType.MAGAZINE: return 1.0
 		CompType.CREW:     return 1.0
 		CompType.ENGINE:   return 2.0
@@ -38,7 +51,9 @@ static func comp_armor(kind: int) -> float:
 
 static func comp_radius(kind: int) -> float:
 	match kind:
-		CompType.WEAPON:   return 0.55
+		CompType.WEAPON:       return 0.55
+		CompType.WEAPON_LONG:  return 0.65
+		CompType.WEAPON_CLOSE: return 0.45
 		CompType.MAGAZINE: return 0.50
 		CompType.CREW:     return 0.45
 		CompType.ENGINE:   return 0.60
@@ -48,7 +63,9 @@ static func comp_radius(kind: int) -> float:
 
 static func comp_crew(kind: int) -> int:
 	match kind:
-		CompType.WEAPON:   return 6
+		CompType.WEAPON:       return 6
+		CompType.WEAPON_LONG:  return 5
+		CompType.WEAPON_CLOSE: return 4
 		CompType.MAGAZINE: return 4
 		CompType.CREW:     return 10
 		CompType.ENGINE:   return 5
@@ -58,13 +75,18 @@ static func comp_crew(kind: int) -> int:
 
 static func comp_name(kind: int) -> String:
 	match kind:
-		CompType.WEAPON:   return "武器舱"
+		CompType.WEAPON:       return "激光炮"
+		CompType.WEAPON_LONG:  return "长程炮"
+		CompType.WEAPON_CLOSE: return "近防炮"
 		CompType.MAGAZINE: return "弹药库"
 		CompType.CREW:     return "人员宿舍"
 		CompType.ENGINE:   return "引擎"
 		CompType.SHIELD:   return "护盾发生器"
 		CompType.SENSOR:   return "传感器"
 	return "舱室"
+
+static func is_weapon(kind: int) -> bool:
+	return kind == CompType.WEAPON or kind == CompType.WEAPON_LONG or kind == CompType.WEAPON_CLOSE
 
 # ---------------------------------------------------------------- 舰长
 #
@@ -118,7 +140,9 @@ static func make_captain(rng: RandomNumberGenerator) -> Captain:
 
 static func comp_color(kind: int) -> Color:
 	match kind:
-		CompType.WEAPON:   return Color(0.95, 0.35, 0.30)
+		CompType.WEAPON:       return Color(0.95, 0.35, 0.30)
+		CompType.WEAPON_LONG:  return Color(0.80, 0.25, 0.55)
+		CompType.WEAPON_CLOSE: return Color(0.98, 0.60, 0.15)
 		CompType.MAGAZINE: return Color(0.95, 0.75, 0.25)
 		CompType.CREW:     return Color(0.45, 0.80, 0.55)
 		CompType.ENGINE:   return Color(0.35, 0.65, 0.95)
@@ -133,10 +157,10 @@ static func slot_theta(i: int) -> float:
 static func slot_h(i: int) -> float:
 	return 1.0 if i < 5 else -1.0
 
-# 默认装配：2 武器 + 2 弹药 + 3 引擎 + 2 护盾 + 1 传感器
+# 默认装配：混合火力（2 激光 + 1 长程炮），玩家可改。
 static func default_loadout() -> Array:
 	return [
-		CompType.WEAPON, CompType.WEAPON, CompType.MAGAZINE, CompType.MAGAZINE,
+		CompType.WEAPON, CompType.WEAPON, CompType.WEAPON_LONG, CompType.MAGAZINE,
 		CompType.ENGINE, CompType.ENGINE, CompType.ENGINE,
 		CompType.SHIELD, CompType.SHIELD, CompType.SENSOR,
 	]
@@ -319,7 +343,7 @@ class ShipModel:
 	func weapons() -> Array:
 		var out: Array = []
 		for c in compartments:
-			if c.kind == Model.CompType.WEAPON and c.alive():
+			if Model.is_weapon(c.kind) and c.alive():
 				out.append(c)
 		return out
 

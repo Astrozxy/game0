@@ -17,6 +17,59 @@ const LASER_COST := 17.0          # 每次开火消耗的能量
 const WEAPON_ARC_HALF_DEG := 100.0
 const BEAM_LIFE := 0.12
 
+# ---- 三种武器的差异 ----
+# 激光：全能，中近程
+# 长程炮：射程远，但近距离打不了（最小射程）
+# 近防炮：射速快，但只够得着很近
+static func w_max_range(kind: int) -> float:
+	match kind:
+		Model.CompType.WEAPON_LONG:  return 55.0
+		Model.CompType.WEAPON_CLOSE: return 14.0
+		_:                           return 35.0
+
+static func w_min_range(kind: int) -> float:
+	match kind:
+		# 长程炮在 14 以内打不了。中距手册的站位约 17.6，刚好还能开火；
+		# 近距手册会把它废掉——这是"大炮不适合贴脸"的设计意图。
+		Model.CompType.WEAPON_LONG: return 14.0
+		_:                          return 0.0
+
+static func w_damage(kind: int) -> float:
+	match kind:
+		Model.CompType.WEAPON_LONG:  return 92.0
+		Model.CompType.WEAPON_CLOSE: return 20.0
+		_:                           return 40.0
+
+static func w_cooldown(kind: int) -> float:
+	match kind:
+		Model.CompType.WEAPON_LONG:  return 3.0
+		Model.CompType.WEAPON_CLOSE: return 0.5
+		_:                           return 1.2
+
+static func w_accuracy(kind: int, band: String) -> float:
+	match kind:
+		Model.CompType.WEAPON_LONG:
+			if band == "far": return 0.80
+			if band == "mid": return 0.58
+			return 0.0
+		Model.CompType.WEAPON_CLOSE:
+			return 0.95 if band == "close" else 0.0
+		_:
+			if band == "close": return 0.92
+			if band == "mid": return 0.72
+			return 0.40
+
+static func w_damage_falloff(kind: int, d: float) -> float:
+	match kind:
+		Model.CompType.WEAPON_LONG:
+			return 1.0 if d > LASER_MID_RANGE else 0.85
+		Model.CompType.WEAPON_CLOSE:
+			return 1.0 if d <= LASER_CLOSE_RANGE else 0.5
+		_:
+			if d <= LASER_CLOSE_RANGE: return 1.0
+			if d <= LASER_MID_RANGE: return 0.78
+			return 0.45
+
 var ships: Array = []
 var duration := 180.0
 var rng := RandomNumberGenerator.new()
@@ -28,10 +81,11 @@ var over := false
 var winner := ""
 
 # 战斗手册：双方各一本。玩家在配船时定自己的，敌方由 AI 预设。
-# band: close / mid / far（允许开火的最远档位）；focus: 是否集火残血。
+# band: close / mid / far（想在哪打，决定站位）；focus: 是否集火残血。
+# 注意：手册不剥夺开火权，只影响站位。否则射程优势会变成单方面挨打。
 var doctrine := {
-	"player": {"band": "mid", "focus": true},
-	"enemy": {"band": "mid", "focus": true},
+	"player": {"band": "mid", "focus": false},
+	"enemy": {"band": "mid", "focus": false},
 }
 
 var _cooldowns: Dictionary = {}   # "uid:index" -> 剩余秒
@@ -50,6 +104,12 @@ var ship_shots := {}      # uid -> int
 var ship_dmg_dealt := {}  # uid -> float
 var ship_dmg_taken := {}  # uid -> float
 var ship_kills := {}      # uid -> int
+
+# 僵持检测：最近一次造成伤害的时刻
+var last_damage_t := 0.0
+
+# 按武器类型统计开火次数（调平衡用）
+var shots_by_kind := {}
 
 # 归因：每方"损失来自哪类舱室"
 var dmg_by_comp := {"player": {}, "enemy": {}}
@@ -158,10 +218,35 @@ func step(dt: float) -> void:
 			winner = "player"
 			log_event("end", "我方获胜", "player")
 		return
+	# 僵持：长时间没有有效交火（多半是残存舰互相够不着），按剩余结构判定。
+	if t > 40.0 and t - last_damage_t > 20.0:
+		over = true
+		winner = _decide_by_hull()
+		log_event("end", "长时间无交火，按剩余结构判定：%s" % winner)
+		return
 	if t >= duration:
 		over = true
-		winner = "player" if p_alive > e_alive else ("enemy" if e_alive > p_alive else "draw")
+		winner = _decide_by_hull()
 		log_event("end", "时间到，判定：%s" % winner)
+
+## 先比存活舰数，再比剩余结构；都接近才算平局。
+func _decide_by_hull() -> String:
+	var p_alive := team_alive("player")
+	var e_alive := team_alive("enemy")
+	if p_alive != e_alive:
+		return "player" if p_alive > e_alive else "enemy"
+	var ph := 0.0
+	var eh := 0.0
+	for s in ships:
+		if not s.alive():
+			continue
+		if s.team == "player":
+			ph += s.hull_integrity()
+		else:
+			eh += s.hull_integrity()
+	if absf(ph - eh) < 0.08:
+		return "draw"
+	return "player" if ph > eh else "enemy"
 
 # ---------------------------------------------------------------- 目标
 
@@ -212,23 +297,21 @@ func move_ship(ship, dt: float) -> void:
 			best = d
 			nearest = e
 	var d: float = best
-	# 手册决定"允许的交战距离上限"，舰长在手册范围内决定实际保持多远。
-	# 舰长的偏好必须被手册夹住，否则谨慎舰长会退到射程外变成哑巴。
-	var desired_gap := 18.0
+	# 想站在"手册允许范围的 80%"处，舰长按性格上下浮动。
+	var desired_gap := doctrine_max_range(ship.team) * 0.8
 	if ship.captain != null:
 		desired_gap *= ship.captain.gap_mult()
-	desired_gap = clampf(desired_gap, 6.0, doctrine_max_range(ship.team) - 2.0)
+	desired_gap = clampf(desired_gap, 6.0, 50.0)
+	# 只前进或驻守，不后退。
+	# 若允许后退，长程舰可以一直风筝，同速下永远追不上，平衡会塌。
 	if d > desired_gap + 2.0:
 		var dir: Vector3 = (nearest.pos - ship.pos).normalized()
 		ship.pos += dir * ship.speed() * dt
-	elif d < desired_gap - 2.0:
-		var dir: Vector3 = (ship.pos - nearest.pos).normalized()
-		ship.pos += dir * ship.speed() * 0.6 * dt
 
 func doctrine_max_range(team: String) -> float:
 	match doctrine[team]["band"]:
 		"close": return LASER_CLOSE_RANGE
-		"far":   return LASER_MAX_RANGE
+		"far":   return 55.0
 		_:       return LASER_MID_RANGE
 
 # ---------------------------------------------------------------- 开火
@@ -279,14 +362,18 @@ func ship_fire(ship) -> void:
 			target = pick_weapon_target(ship, comp, enemies)
 		if target == null:
 			continue
-		_cooldowns[key] = LASER_COOLDOWN
+		_cooldowns[key] = w_cooldown(comp.kind)
 		fire_laser(ship, comp, target)
 
 func weapon_can_hit(ship, comp, target) -> bool:
 	var d: float = (target.pos - ship.pos).length()
-	if d > LASER_MAX_RANGE:
+	# 每种武器有自己的射程与最小射程：
+	# 长程炮在 14 以内打不了，近防炮在 14 以外够不着。
+	# 注意：手册不限制开火——手册只决定"想站多远"，不能剥夺还击能力，
+	# 否则射程优势会变成单方面挨打，平衡直接崩掉。
+	if d > w_max_range(comp.kind):
 		return false
-	if not doctrine_allows(d, ship.team):
+	if d < w_min_range(comp.kind):
 		return false
 	var mount_dir: Vector3 = (ship.basis() * comp.local_offset()).normalized()
 	var to_target: Vector3 = (target.pos - ship.pos).normalized()
@@ -307,12 +394,15 @@ func pick_weapon_target(ship, comp, enemies: Array):
 func fire_laser(ship, comp, target) -> void:
 	stat_shots[ship.team] += 1
 	ship_shots[ship.uid] = ship_shots.get(ship.uid, 0) + 1
+	var kind_name: String = Model.comp_name(comp.kind)
+	shots_by_kind[kind_name] = shots_by_kind.get(kind_name, 0) + 1
 	var d: float = (target.pos - ship.pos).length()
 	var band := range_band(d)
-	var acc: float = band_accuracy(band) * ship.accuracy()
+	# 每个武器舱按自己的类型算命中与伤害
+	var acc: float = w_accuracy(comp.kind, band) * ship.accuracy()
 	if ship.captain != null:
 		acc *= ship.captain.accuracy_mod()
-	acc = clampf(acc, 0.05, 0.98)
+	acc = clampf(acc, 0.03, 0.98)
 	var from: Vector3 = ship.comp_world_pos(comp)
 
 	var r: RandomNumberGenerator = _rngs[ship.uid]
@@ -324,7 +414,7 @@ func fire_laser(ship, comp, target) -> void:
 		beams.append({"a": from, "b": miss_pt, "life": BEAM_LIFE, "team": ship.team, "hit": false})
 		return
 
-	var dmg: float = LASER_BASE_DAMAGE * band_damage(d) * r.randf_range(0.85, 1.15)
+	var dmg: float = w_damage(comp.kind) * w_damage_falloff(comp.kind, d) * r.randf_range(0.85, 1.15)
 	dmg *= (1.0 - target.damage_reduction())
 
 	var hit_comp = resolve_hit_compartment(ship, target, from, r)
@@ -337,6 +427,8 @@ func fire_laser(ship, comp, target) -> void:
 	var before: int = hit_comp.state
 	var was_breached: bool = hit_comp.breached
 	var dealt: float = hit_comp.take_damage(dmg)
+	if dealt > 0.0:
+		last_damage_t = t
 	stat_hits[ship.team] += 1
 	stat_damage[ship.team] += dealt
 	ship_dmg_dealt[ship.uid] = ship_dmg_dealt.get(ship.uid, 0.0) + dealt

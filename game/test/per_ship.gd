@@ -27,4 +27,9 @@ func _init() -> void:
 			sim.ship_dmg_dealt.get(s.uid, 0.0),
 			sim.ship_dmg_taken.get(s.uid, 0.0),
 			s.hull_integrity() * 100.0])
+
+	print("")
+	print("按武器类型开火数:")
+	for k in sim.shots_by_kind.keys():
+		print("  %s: %d" % [k, sim.shots_by_kind[k]])
 	quit()

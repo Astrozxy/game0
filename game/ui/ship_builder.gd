@@ -11,10 +11,10 @@ var slot_buttons: Array = []
 var stats_label: Label
 var band_buttons: Dictionary = {}
 
-# 战斗手册：玩家定的"允许边界"。舰长在这条边界内自行决定怎么打。
+# 战斗手册：玩家定的"想在哪打"。舰长在这条范围里自行决定怎么打。
 var doctrine := {
 	"fire_band": "mid",
-	"focus_fire": true,
+	"focus_fire": false,
 	"hold_range": true,
 }
 
@@ -101,6 +101,7 @@ func _build_ui() -> void:
 	var band_defs := [
 		["close", "允许近距"],
 		["mid", "允许中距"],
+		["far", "允许远距"],
 	]
 	var bx: float = W - panel_w - W * 0.02
 	var bw: float = minf(132.0, panel_w / 3.0 - 8.0)
@@ -121,12 +122,12 @@ func _build_ui() -> void:
 	focus_btn.size = Vector2(bw, 38)
 	focus_btn.add_theme_font_size_override("font_size", 14)
 	focus_btn.toggle_mode = true
-	focus_btn.button_pressed = true
+	focus_btn.button_pressed = false
 	focus_btn.toggled.connect(func(on: bool): doctrine["focus_fire"] = on)
 	add_child(focus_btn)
 
 	var far_note := Label.new()
-	far_note.text = "远距暂不开放：目前只有一种激光，远距开火只有劣势"
+	far_note.text = "长程武器要靠远距手册才发挥得出来"
 	far_note.position = Vector2(W - panel_w - W * 0.02 + bw * 2.0 + 24.0, H * 0.655)
 	far_note.add_theme_font_size_override("font_size", 12)
 	far_note.add_theme_color_override("font_color", Color(0.50, 0.55, 0.62))
@@ -144,7 +145,7 @@ func _build_ui() -> void:
 	add_child(launch_btn)
 
 func _cycle_slot(i: int) -> void:
-	loadout[i] = (int(loadout[i]) + 1) % 6
+	loadout[i] = (int(loadout[i]) + 1) % 8
 	_refresh()
 
 func _set_band(band: String) -> void:
@@ -157,7 +158,9 @@ func _refresh() -> void:
 		var btn: Button = slot_buttons[i]
 		var short_name := "武器"
 		match int(kind):
-			Model.CompType.WEAPON: short_name = "武器"
+			Model.CompType.WEAPON: short_name = "激光"
+			Model.CompType.WEAPON_LONG: short_name = "长程"
+			Model.CompType.WEAPON_CLOSE: short_name = "近防"
 			Model.CompType.MAGAZINE: short_name = "弹药库"
 			Model.CompType.CREW: short_name = "宿舍"
 			Model.CompType.ENGINE: short_name = "引擎"
@@ -171,21 +174,32 @@ func _refresh() -> void:
 		btn.add_theme_color_override("font_color", Color(0.95, 0.96, 0.98))
 
 	var probe := Model.ShipModel.new(0, "probe", "player", Vector3.ZERO, loadout)
-	var counts := {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+	var counts := {}
 	for k in loadout:
 		counts[int(k)] = counts.get(int(k), 0) + 1
 
-	var dps: float = counts[Model.CompType.WEAPON] * BattleSim.LASER_BASE_DAMAGE / BattleSim.LASER_COOLDOWN
+	# 理论火力：按每种武器的单发伤害 / 冷却累加
+	var dps := 0.0
+	for k in counts.keys():
+		if Model.is_weapon(k):
+			dps += counts[k] * BattleSim.w_damage(k) / BattleSim.w_cooldown(k)
+
 	var lines: Array = []
 	lines.append("舰体配置")
 	lines.append("────────────────────────")
-	lines.append("武器舱 %d    弹药库 %d" % [counts[0], counts[1]])
-	lines.append("引  擎 %d    护  盾 %d" % [counts[3], counts[4]])
-	lines.append("宿  舍 %d    传感器 %d" % [counts[2], counts[5]])
+	lines.append("激光 %d  长程 %d  近防 %d" % [
+		counts.get(Model.CompType.WEAPON, 0),
+		counts.get(Model.CompType.WEAPON_LONG, 0),
+		counts.get(Model.CompType.WEAPON_CLOSE, 0)])
+	lines.append("弹药库 %d    宿舍 %d" % [
+		counts.get(Model.CompType.MAGAZINE, 0), counts.get(Model.CompType.CREW, 0)])
+	lines.append("引  擎 %d    护  盾 %d    传感器 %d" % [
+		counts.get(Model.CompType.ENGINE, 0), counts.get(Model.CompType.SHIELD, 0),
+		counts.get(Model.CompType.SENSOR, 0)])
 	lines.append("")
 	lines.append("推算性能")
 	lines.append("────────────────────────")
-	lines.append("理论火力   %.0f / 秒" % dps)
+	lines.append("理论火力   %.0f / 秒（按满命中）" % dps)
 	lines.append("航速       %.2f" % probe.speed())
 	lines.append("命中系数   %.0f%%" % (probe.accuracy() * 100.0))
 	lines.append("减伤       %.0f%%" % (probe.damage_reduction() * 100.0))
@@ -193,8 +207,10 @@ func _refresh() -> void:
 	lines.append("总结构     %.0f" % probe.total_max_hp())
 	lines.append("船员编制   %d 人" % probe.crew_capacity())
 	lines.append("")
-	lines.append("提示：弹药库被击穿会殉爆。")
-	lines.append("引擎和护盾决定你能不能活着靠近。")
+	lines.append("武器特性：")
+	lines.append("激光 0–35，全能")
+	lines.append("长程 18–55，单发高，近距离打不了")
+	lines.append("近防 0–14，射速快，够不着远的")
 	stats_label.text = "\n".join(lines)
 
 	_refresh_doctrine()
