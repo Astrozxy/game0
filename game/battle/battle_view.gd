@@ -47,6 +47,8 @@ var flash_life: Array = []
 var flash_peak: Array = []
 var flash_cursor := 0
 var beam_trails: Array = []
+var wreck_done: Dictionary = {}
+var wreck_parts: Array = []
 
 var cam: Camera3D
 var cam_dist := 58.0
@@ -1003,12 +1005,93 @@ func _process(delta: float) -> void:
 	_update_turrets(delta)
 	_update_crew_mm(delta)
 	_update_flashes(delta)
+	_update_wrecks(delta)
 	_update_camera_follow()
 	_sync_beams(delta)
 	_update_hud()
 
 	if sim.over and not _result_shown:
 		_show_result()
+
+# ---------------------------------------------------------------- 残骸
+
+## 舰船被击毁：断成几块带速度漂走，并闪一下
+func _update_wrecks(delta: float) -> void:
+	for ship in sim.ships:
+		if ship.alive() or wreck_done.has(ship.uid):
+			continue
+		wreck_done[ship.uid] = true
+		_spawn_wreck(ship)
+
+	var dt: float = delta * maxf(speed_scale, 0.2)
+	for i in range(wreck_parts.size() - 1, -1, -1):
+		var w: Dictionary = wreck_parts[i]
+		var node: Node3D = w["node"]
+		node.position += w["vel"] * dt
+		node.rotation += w["spin"] * dt
+		w["life"] -= dt
+		var life: float = w["life"]
+		var mat: StandardMaterial3D = w["mat"]
+		var base_col: Color = w["base"]
+		mat.emission = Color(1.0, 0.42, 0.12) * clampf(life / 8.0, 0.0, 1.0) * 0.8
+		if life < 2.5:
+			mat.albedo_color = base_col.lerp(Color(0.02, 0.02, 0.03), clampf(1.0 - life / 2.5, 0.0, 1.0))
+		if life <= 0.0:
+			node.queue_free()
+			wreck_parts.remove_at(i)
+
+func _spawn_wreck(ship) -> void:
+	var accent := _team_accent(ship.team)
+	var hd := Model.hull_data(ship.hull_class)
+	var length: float = float(hd["length"])
+	var width: float = float(hd["width"])
+	# 爆炸闪光
+	_spawn_flash(ship.pos, Color(1.0, 0.72, 0.35), 2.6, 0.35)
+	_spawn_flash(ship.pos + Vector3(0, 0.4, 0), Color(1.0, 0.9, 0.7), 1.6, 0.22)
+
+	var pieces := 10
+	for k in pieces:
+		var mi := MeshInstance3D.new()
+		var b := BoxMesh.new()
+		b.size = Vector3(randf_range(0.4, width * 0.42), randf_range(0.18, 0.6),
+			randf_range(0.8, length * 0.22))
+		mi.mesh = b
+		var m := _metal(Color(0.13, 0.14, 0.17).lerp(accent, 0.06), 0.5, 0.6)
+		# 刚炸开的残骸是热的：带一点橙色自发光，随时间冷却
+		m.emission_enabled = true
+		m.emission = Color(1.0, 0.42, 0.12) * 0.8
+		mi.material_override = m
+		var along := randf_range(-length * 0.45, length * 0.45)
+		mi.position = ship.pos + ship.basis() * Vector3(randf_range(-width * 0.3, width * 0.3), randf_range(-0.3, 0.5), along)
+		mi.rotation = Vector3(randf() * TAU, randf() * TAU, randf() * TAU)
+		add_child(mi)
+		var outward: Vector3 = (mi.position - ship.pos).normalized()
+		wreck_parts.append({
+			"node": mi,
+			"vel": outward * randf_range(0.3, 1.1) + Vector3(0, randf_range(-0.15, 0.35), 0),
+			"spin": Vector3(randf_range(-0.5, 0.5), randf_range(-0.5, 0.5), randf_range(-0.5, 0.5)),
+			"life": randf_range(7.0, 10.0),
+			"mat": m,
+			"base": m.albedo_color,
+		})
+
+	# 残骸里的火花
+	var em := _make_emitter()
+	em.position = ship.pos
+	em.emitting = true
+	em.amount = 40
+	em.color = Color(1.0, 0.55, 0.2)
+	add_child(em)
+	# 火花只活一会儿
+	var timer := get_tree().create_timer(1.6)
+	timer.timeout.connect(func():
+		if is_instance_valid(em):
+			em.emitting = false
+			var t2 := get_tree().create_timer(1.2)
+			t2.timeout.connect(func():
+				if is_instance_valid(em):
+					em.queue_free())
+	)
 
 func _sync_ships() -> void:
 	for ship in sim.ships:
