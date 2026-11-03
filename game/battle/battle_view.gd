@@ -12,7 +12,7 @@ signal finished(summary: Dictionary)
 
 const FIXED_DT := 0.05
 const SHIPS_PER_SIDE := 6
-const CREW_PER_SHIP := 12
+const CREW_PER_SHIP := 18
 const CREW_SPEED := 2.4
 const MIN_DIST := 16.0
 const MAX_DIST := 150.0
@@ -29,6 +29,7 @@ var _finished_emitted := false
 var ship_nodes: Dictionary = {}      # uid -> Node3D
 var comp_mats: Dictionary = {}       # "uid:index" -> StandardMaterial3D
 var emitters: Dictionary = {}        # uid -> CPUParticles3D（受损舱室的火花/碎屑）
+var prev_comp_state: Dictionary = {} # "uid:index" -> 上一帧状态（用于检测"刚被打爆"）
 var crew_units: Dictionary = {}      # uid -> Array[Dictionary]
 var flying_crew: Array = []          # {node, vel, spin, life}
 var beam_mesh: ImmediateMesh
@@ -51,6 +52,14 @@ func _ready() -> void:
 	sim = BattleSim.make_battle(SHIPS_PER_SIDE, randi(), loadout, doctrine)
 	_build_ships()
 	_build_hud()
+	# 调试：--closeup 时跟着第一艘舰近距离观察
+	if OS.get_cmdline_args().has("--closeup") or OS.get_cmdline_user_args().has("--closeup"):
+		for s in sim.ships:
+			if s.team == "player":
+				follow_uid = s.uid
+				cam_target = s.pos
+				break
+		cam_dist = 13.0
 	_apply_camera()
 
 func _setup_world() -> void:
@@ -303,35 +312,70 @@ func _emissive(c: Color, strength := 0.9) -> StandardMaterial3D:
 	m.roughness = 0.4
 	return m
 
+## 船员小人：身体 + 头 + 背包。不做布娃娃物理，只做动作。
+func _make_crew_figure(team: String) -> Node3D:
+	var root := Node3D.new()
+	var skin := Color(0.86, 0.93, 1.0) if team == "player" else Color(1.0, 0.87, 0.83)
+	var suit := _emissive(skin, 0.45)
+	suit.metallic = 0.05
+	suit.roughness = 0.75
+
+	var body := MeshInstance3D.new()
+	var cap := CapsuleMesh.new()
+	cap.radius = 0.062
+	cap.height = 0.30
+	body.mesh = cap
+	body.position.y = 0.15
+	body.material_override = suit
+	root.add_child(body)
+
+	var head := MeshInstance3D.new()
+	var sph := SphereMesh.new()
+	sph.radius = 0.052
+	sph.height = 0.104
+	head.mesh = sph
+	head.position.y = 0.34
+	head.material_override = _emissive(Color(0.95, 0.95, 0.98), 0.35)
+	root.add_child(head)
+
+	var pack := MeshInstance3D.new()
+	var pb := BoxMesh.new()
+	pb.size = Vector3(0.075, 0.10, 0.045)
+	pack.mesh = pb
+	pack.position = Vector3(0, 0.18, -0.055)
+	pack.material_override = _metal(Color(0.30, 0.32, 0.37), 0.4, 0.6)
+	root.add_child(pack)
+
+	return root
+
 func _build_crew_for(ship_node: Node3D, ship) -> void:
 	var units: Array = []
-	var total_crew := maxi(1, ship.crew_capacity())
 	for i in CREW_PER_SHIP:
-		# 按编制比例分配到舱室
-		var pick := int(float(i) / float(CREW_PER_SHIP) * float(ship.compartments.size()))
-		var comp = ship.compartments[mini(pick, ship.compartments.size() - 1)]
-
-		var fig := MeshInstance3D.new()
-		var capsule := CapsuleMesh.new()
-		capsule.radius = 0.075
-		capsule.height = 0.34
-		fig.mesh = capsule
-		var mat := StandardMaterial3D.new()
-		mat.albedo_color = Color(0.85, 0.93, 1.0) if ship.team == "player" else Color(1.0, 0.86, 0.82)
-		mat.emission_enabled = true
-		mat.emission = mat.albedo_color * 0.5
-		fig.material_override = mat
-		fig.position = comp.local_offset()
+		var fig := _make_crew_figure(ship.team)
+		var spot := _idle_spot(ship)
+		fig.position = spot
 		ship_node.add_child(fig)
-
 		units.append({
 			"node": fig,
-			"comp_index": comp.index,
-			"target": comp.local_offset(),
-			"timer": randf_range(0.2, 1.6),
-			"base": comp.local_offset(),
+			"state": "idle",
+			"target": spot,
+			"timer": randf_range(0.1, 0.9),
+			"phase": randf() * TAU,
+			"station": -1,
+			"home": spot,
 		})
 	crew_units[ship.uid] = units
+
+## 甲板上一个随机待命点（贴近舰体表面）
+func _idle_spot(ship) -> Vector3:
+	var z := randf_range(-4.6, 4.2)
+	var x := randf_range(-1.25, 1.25)
+	return Vector3(x, 0.56, z)
+
+## 某个舱室旁边的一个落脚点（在装甲面上）
+func _station_spot(comp) -> Vector3:
+	var base: Vector3 = comp.local_pos + comp.dir * 0.42
+	return base + Vector3(randf_range(-0.18, 0.18), randf_range(0.0, 0.10), randf_range(-0.18, 0.18))
 
 ## 受损舱室的粒子发射器：引擎喷火花、武器舱掉碎屑、护盾冒电弧。
 func _make_emitter() -> CPUParticles3D:
@@ -562,70 +606,159 @@ func _sync_ships() -> void:
 			else:
 				mat.albedo_color = Model.comp_color(comp.kind)
 				mat.emission = Model.comp_color(comp.kind) * 0.25
+
+			# 舱室被打爆的那一瞬间：附近船员四散 / 被抛出
+			var key := "%d:%d" % [ship.uid, comp.index]
+			var prev: int = prev_comp_state.get(key, Model.CompState.ONLINE)
+			if comp.state == Model.CompState.OFFLINE and prev != Model.CompState.OFFLINE:
+				_panic_near(ship, comp)
+			prev_comp_state[key] = comp.state
 		_update_damage_emitter(ship, node)
 
 # ---------------------------------------------------------------- 船员
 
 func _update_crew(delta: float) -> void:
+	var dt: float = delta * maxf(speed_scale, 0.15)
 	for ship in sim.ships:
 		var units: Array = crew_units.get(ship.uid, [])
 		if units.is_empty():
 			continue
 		var alive: bool = ship.alive() and ship.crew_alive() > 0
-		for u in units:
-			var fig: MeshInstance3D = u["node"]
+		for i in units.size():
+			var u: Dictionary = units[i]
+			var fig: Node3D = u["node"]
 			if not alive:
 				fig.visible = false
 				continue
 			fig.visible = true
-			u["timer"] -= delta * speed_scale
-			if u["timer"] <= 0.0:
-				u["timer"] = randf_range(0.8, 2.2)
-				u["target"] = _pick_crew_target(ship, u)
+			var st: String = u["state"]
 
-			var target: Vector3 = u["target"]
-			var cur: Vector3 = fig.position
-			var d: Vector3 = target - cur
-			if d.length() > 0.04:
-				fig.position = cur + d.normalized() * minf(CREW_SPEED * delta * speed_scale, d.length())
-			else:
-				# 到了就原地小幅晃动，像在干活
-				fig.position = cur + Vector3(randf_range(-0.01, 0.01), randf_range(0.0, 0.02), randf_range(-0.01, 0.01))
+			match st:
+				"panic":
+					# 四散逃跑：朝远离爆点的方向跑，跑一段后恢复
+					_walk_crew(u, dt)
+					u["timer"] -= dt
+					if u["timer"] <= 0.0:
+						u["state"] = "idle"
+						u["timer"] = randf_range(0.3, 1.0)
+						u["target"] = _idle_spot(ship)
+						u["station"] = -1
+				"walk":
+					if _walk_crew(u, dt):
+						u["state"] = "work"
+						u["timer"] = randf_range(1.6, 3.6)
+				"work":
+					# 干活：轻微上下起伏 + 小幅摆动
+					u["phase"] += dt * 7.0
+					var base: Vector3 = u["work_pos"]
+					fig.position = base + Vector3(0, sin(u["phase"]) * 0.022, 0)
+					fig.rotation.y += sin(u["phase"] * 0.5) * 0.03
+					u["timer"] -= dt
+					if u["timer"] <= 0.0:
+						u["state"] = "idle"
+						u["timer"] = randf_range(0.2, 0.8)
+				_:
+					_walk_crew(u, dt)
+					u["timer"] -= dt
+					if u["timer"] <= 0.0:
+						_assign_job(ship, u, i)
 
-func _pick_crew_target(ship, unit: Dictionary) -> Vector3:
-	var home: Vector3 = unit["base"]
-	# 优先去受损的舱室修理
-	var damaged = null
+## 朝目标走；到达返回 true
+func _walk_crew(u: Dictionary, dt: float) -> bool:
+	var fig: Node3D = u["node"]
+	var target: Vector3 = u["target"]
+	var cur: Vector3 = fig.position
+	var d: Vector3 = target - cur
+	if d.length() <= 0.06:
+		return true
+	var step: Vector3 = d.normalized() * minf(CREW_SPEED * dt, d.length())
+	fig.position = cur + step
+	# 面朝移动方向 + 走路的上下起伏
+	u["phase"] += dt * 12.0
+	fig.rotation.y = atan2(step.x, step.z)
+	fig.position.y += sin(u["phase"]) * 0.012
+	return false
+
+## 分配岗位：按编号分散到不同炮位；有受损舱室时，部分人去修理；其余回甲板
+func _assign_job(ship, u: Dictionary, idx: int) -> void:
+	var guns: Array = []
+	var damaged: Array = []
 	for c in ship.compartments:
-		if c.alive() and c.hp_ratio() < 0.7:
-			damaged = c
-			break
-	if damaged != null and randf() < 0.55:
-		var off: Vector3 = damaged.local_offset()
-		return off + Vector3(randf_range(-0.35, 0.35), randf_range(-0.25, 0.25), randf_range(-0.35, 0.35))
-	# 否则回自己的舱室附近待命
-	return home + Vector3(randf_range(-0.45, 0.45), randf_range(-0.2, 0.3), randf_range(-0.45, 0.45))
+		if not c.alive():
+			continue
+		if Model.is_weapon(c.kind):
+			guns.append(c)
+		if c.hp_ratio() < 0.65:
+			damaged.append(c)
+
+	var pick = null
+	# 每 4 个人里有 1 个负责修理
+	if damaged.size() > 0 and idx % 4 == 0:
+		pick = damaged[idx % damaged.size()]
+	elif guns.size() > 0:
+		pick = guns[idx % guns.size()]
+
+	if pick != null:
+		u["state"] = "walk"
+		u["station"] = pick.index
+		u["work_pos"] = _station_spot(pick)
+		u["target"] = u["work_pos"]
+	else:
+		u["state"] = "walk"
+		u["station"] = -1
+		u["target"] = _idle_spot(ship)
+	u["timer"] = randf_range(2.5, 5.0)
+
+## 某个舱室被击穿：附近的船员四散，一部分当场被抛出船外
+func _panic_near(ship, comp) -> void:
+	var units: Array = crew_units.get(ship.uid, [])
+	if units.is_empty():
+		return
+	var blast: Vector3 = comp.local_pos
+	for u in units:
+		var fig: Node3D = u["node"]
+		if not fig.visible:
+			continue
+		var d: float = (fig.position - blast).length()
+		if d > 3.2:
+			continue
+		# 一半恐慌逃跑，一半被抛出去
+		if randf() < 0.5:
+			u["state"] = "panic"
+			var away: Vector3 = (fig.position - blast)
+			if away.length() < 0.01:
+				away = Vector3(randf_range(-1, 1), 0.2, randf_range(-1, 1))
+			u["target"] = fig.position + away.normalized() * randf_range(1.2, 2.4) + Vector3(0, 0.05, 0)
+			u["timer"] = randf_range(0.8, 1.6)
+			u["station"] = -1
+		else:
+			fig.visible = false
+			_spawn_flying_crew(ship, fig.position, 1)
+
+func _spawn_flying_crew(ship, local_pos: Vector3, count: int) -> void:
+	var world: Vector3 = ship.local_to_world(local_pos)
+	for i in count:
+		var fig := _make_crew_figure(ship.team)
+		fig.position = world + Vector3(randf_range(-0.12, 0.12), randf_range(-0.12, 0.12), randf_range(-0.12, 0.12))
+		add_child(fig)
+		flying_crew.append({
+			"node": fig,
+			"vel": Vector3(randf_range(-0.9, 0.9), randf_range(-0.2, 1.1), randf_range(-0.9, 0.9)),
+			"spin": Vector3(randf_range(-2.2, 2.2), randf_range(-2.2, 2.2), randf_range(-2.2, 2.2)),
+			"life": 3.6,
+		})
 
 func _drain_ejections() -> void:
 	while sim.ejections.size() > 0:
 		var e: Dictionary = sim.ejections.pop_front()
-		var n: int = mini(int(e["count"]), 6)
+		var n: int = mini(int(e["count"]), 5)
 		for i in n:
-			var fig := MeshInstance3D.new()
-			var capsule := CapsuleMesh.new()
-			capsule.radius = 0.11
-			capsule.height = 0.52
-			fig.mesh = capsule
-			var mat := StandardMaterial3D.new()
-			mat.albedo_color = Color(0.85, 0.93, 1.0) if e["team"] == "player" else Color(1.0, 0.86, 0.82)
-			mat.emission_enabled = true
-			mat.emission = mat.albedo_color * 0.5
-			fig.material_override = mat
-			fig.position = e["pos"] + Vector3(randf_range(-0.4, 0.4), randf_range(-0.4, 0.4), randf_range(-0.4, 0.4))
+			var fig := _make_crew_figure(e["team"])
+			fig.position = e["pos"] + Vector3(randf_range(-0.35, 0.35), randf_range(-0.35, 0.35), randf_range(-0.35, 0.35))
 			add_child(fig)
 			flying_crew.append({
 				"node": fig,
-				"vel": Vector3(randf_range(-0.8, 0.8), randf_range(-0.3, 1.0), randf_range(-0.8, 0.8)),
+				"vel": Vector3(randf_range(-0.9, 0.9), randf_range(-0.2, 1.2), randf_range(-0.9, 0.9)),
 				"spin": Vector3(randf_range(-2.5, 2.5), randf_range(-2.5, 2.5), randf_range(-2.5, 2.5)),
 				"life": 3.5,
 			})
@@ -633,7 +766,7 @@ func _drain_ejections() -> void:
 func _update_flying_crew(delta: float) -> void:
 	for i in range(flying_crew.size() - 1, -1, -1):
 		var f: Dictionary = flying_crew[i]
-		var node: MeshInstance3D = f["node"]
+		var node: Node3D = f["node"]
 		node.position += f["vel"] * delta * speed_scale
 		node.rotation += f["spin"] * delta * speed_scale
 		f["life"] -= delta * speed_scale
