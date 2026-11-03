@@ -41,6 +41,12 @@ var comp_base_emission: Dictionary = {}
 var player_hull: int = Model.HullClass.CRUISER
 var commanded_hull: int = Model.HullClass.CRUISER
 var beam_mesh: ImmediateMesh
+const FLASH_COUNT := 64
+var flash_nodes: Array = []
+var flash_life: Array = []
+var flash_peak: Array = []
+var flash_cursor := 0
+var beam_trails: Array = []
 
 var cam: Camera3D
 var cam_dist := 58.0
@@ -104,6 +110,7 @@ func _setup_world() -> void:
 	env.environment = e
 	add_child(env)
 
+	_build_flash_pool()
 	beam_mesh = ImmediateMesh.new()
 	var beam_node := MeshInstance3D.new()
 	beam_node.mesh = beam_mesh
@@ -995,8 +1002,9 @@ func _process(delta: float) -> void:
 	_sync_ships()
 	_update_turrets(delta)
 	_update_crew_mm(delta)
+	_update_flashes(delta)
 	_update_camera_follow()
-	_sync_beams()
+	_sync_beams(delta)
 	_update_hud()
 
 	if sim.over and not _result_shown:
@@ -1134,10 +1142,27 @@ func _update_camera_follow() -> void:
 
 # ---------------------------------------------------------------- 光束与 HUD
 
-func _sync_beams() -> void:
+func _sync_beams(delta: float) -> void:
+	# 光束本身只存在一帧，加一小段拖影，否则几乎看不见
+	for b in sim.beams:
+		beam_trails.append({"a": b["a"], "b": b["b"], "team": b["team"],
+			"hit": b["hit"], "life": 0.11})
+	for i in range(beam_trails.size() - 1, -1, -1):
+		beam_trails[i]["life"] -= delta
+		if beam_trails[i]["life"] <= 0.0:
+			beam_trails.remove_at(i)
+
 	beam_mesh.clear_surfaces()
-	if sim.beams.size() > 0:
+	if sim.beams.size() > 0 or beam_trails.size() > 0:
 		beam_mesh.surface_begin(Mesh.PRIMITIVE_LINES)
+		for b in beam_trails:
+			var tc: Color = Color(0.55, 0.85, 1.0) if b["team"] == "player" else Color(1.0, 0.55, 0.45)
+			var k: float = clampf(float(b["life"]) / 0.11, 0.0, 1.0)
+			tc = tc * (0.25 + 0.55 * k)
+			beam_mesh.surface_set_color(tc)
+			beam_mesh.surface_add_vertex(b["a"])
+			beam_mesh.surface_set_color(tc)
+			beam_mesh.surface_add_vertex(b["b"])
 		for b in sim.beams:
 			var c: Color = Color(0.55, 0.85, 1.0) if b["team"] == "player" else Color(1.0, 0.55, 0.45)
 			if b["hit"]:
@@ -1147,6 +1172,71 @@ func _sync_beams() -> void:
 			beam_mesh.surface_set_color(c)
 			beam_mesh.surface_add_vertex(b["b"])
 		beam_mesh.surface_end()
+
+		# 开火闪光 + 命中闪光
+		var budget := 10
+		for b in sim.beams:
+			if budget <= 0:
+				break
+			budget -= 1
+			var col: Color = Color(0.60, 0.88, 1.0) if b["team"] == "player" else Color(1.0, 0.60, 0.48)
+			_spawn_flash(b["a"], col * 0.9, 0.12, 0.16)
+			if b["hit"]:
+				_spawn_flash(b["b"], col.lightened(0.4), 0.20, 0.26)
+
+## 闪光池：固定数量的发光球，循环复用，避免频繁创建节点
+func _build_flash_pool() -> void:
+	for i in FLASH_COUNT:
+		var mi := MeshInstance3D.new()
+		var s := SphereMesh.new()
+		s.radius = 0.5
+		s.height = 1.0
+		s.radial_segments = 8
+		s.rings = 4
+		mi.mesh = s
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.emission_enabled = true
+		m.emission = Color(1, 1, 1)
+		mi.material_override = m
+		mi.visible = false
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mi)
+		flash_nodes.append(mi)
+		flash_life.append(0.0)
+		flash_peak.append(0.1)
+
+func _spawn_flash(pos: Vector3, col: Color, size: float, life: float) -> void:
+	if flash_nodes.is_empty():
+		return
+	var i: int = flash_cursor
+	flash_cursor = (flash_cursor + 1) % flash_nodes.size()
+	var mi: MeshInstance3D = flash_nodes[i]
+	mi.position = pos
+	mi.scale = Vector3.ONE * size
+	mi.visible = true
+	var m: StandardMaterial3D = mi.material_override
+	m.albedo_color = Color(col.r, col.g, col.b, 0.95)
+	m.emission = col * 1.8
+	flash_life[i] = life
+	flash_peak[i] = life
+
+func _update_flashes(delta: float) -> void:
+	for i in flash_nodes.size():
+		var life: float = flash_life[i]
+		if life <= 0.0:
+			continue
+		life -= delta * maxf(speed_scale, 0.2)
+		flash_life[i] = life
+		var mi: MeshInstance3D = flash_nodes[i]
+		if life <= 0.0:
+			mi.visible = false
+			continue
+		var k: float = life / maxf(0.001, flash_peak[i])
+		mi.scale = mi.scale.lerp(Vector3.ONE * 0.02, 1.0 - k)
+		var m: StandardMaterial3D = mi.material_override
+		m.albedo_color.a = clampf(k, 0.0, 1.0) * 0.95
 
 func _update_hud() -> void:
 	var p_crew := 0
