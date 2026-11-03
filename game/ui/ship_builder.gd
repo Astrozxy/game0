@@ -4,12 +4,14 @@ extends Control
 ##
 ## 布局按实际窗口尺寸自适应，不写死 1600x900。
 
-signal launch(loadout: Array, doctrine: Dictionary)
+signal launch(loadout: Array, doctrine: Dictionary, hull_class: int)
 
-var loadout: Array = Model.default_loadout()
+var hull_class: int = Model.HullClass.CRUISER
+var loadout: Array = Model.default_loadout(Model.HullClass.CRUISER)
 var slot_buttons: Array = []
 var stats_label: Label
 var band_buttons: Dictionary = {}
+var hull_buttons: Array = []
 
 # 战斗手册：玩家定的"想在哪打"。舰长在这条范围里自行决定怎么打。
 var doctrine := {
@@ -25,7 +27,7 @@ var slot_size := 0.0
 
 ## 把舰体局部坐标 (x, z) 映射到界面坐标：上方 = 舰首。
 func hardpoint_screen(i: int) -> Vector2:
-	var p: Vector3 = Model.hardpoint_pos(i)
+	var p: Vector3 = Model.hardpoint_pos(hull_class, i)
 	return center_pos + Vector2(p.x * hp_scale, -p.z * hp_scale)
 
 func _ready() -> void:
@@ -66,7 +68,7 @@ func _build_ui() -> void:
 	core.add_theme_color_override("font_color", Color(0.85, 0.88, 0.92))
 	add_child(core)
 
-	for i in Model.SLOT_COUNT:
+	for i in Model.slot_count(hull_class):
 		var btn := Button.new()
 		btn.size = Vector2(slot_size, slot_size)
 		btn.custom_minimum_size = Vector2(slot_size, slot_size)
@@ -167,7 +169,7 @@ func _refresh() -> void:
 			Model.CompType.ENGINE: short_name = "引擎"
 			Model.CompType.SHIELD: short_name = "护盾"
 			Model.CompType.SENSOR: short_name = "传感器"
-		btn.text = "%s\n%s" % [short_name, Model.hardpoint_name(i)]
+		btn.text = "%s\n%s" % [short_name, Model.hardpoint_name(hull_class, i)]
 		var c: Color = Model.comp_color(kind)
 		btn.add_theme_stylebox_override("normal", _flat(c.darkened(0.45)))
 		btn.add_theme_stylebox_override("hover", _flat(c.darkened(0.30)))

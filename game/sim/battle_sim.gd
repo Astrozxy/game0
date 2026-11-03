@@ -644,22 +644,26 @@ func summary() -> Dictionary:
 # ---------------------------------------------------------------- 场景构造
 
 static func make_battle(n_per_side: int, seed: int, loadout: Array,
-		doctrine: Dictionary = {}) -> BattleSim:
+		doctrine: Dictionary = {}, hull_class: int = Model.HullClass.CRUISER,
+		enemy_hull: int = -1) -> BattleSim:
 	var ships: Array = []
 	var uid := 0
+	if enemy_hull < 0:
+		enemy_hull = hull_class
 	# 沿 Z 轴展开（深度），X 是两军间距，Y 做少量高度差。
 	# 敌方 z 取反：让两队阵型正好是 180° 旋转关系，避免手性不对称。
+	var spacing := 5.6
 	for i in n_per_side:
-		var off := (float(i) - (n_per_side - 1) / 2.0) * 4.0
+		var off := (float(i) - (n_per_side - 1) / 2.0) * spacing
 		var p := Model.ShipModel.new(uid, "P-%02d" % (i + 1), "player",
-			Vector3(-30.0, float(i % 3 - 1) * 0.8, off), loadout)
+			Vector3(-32.0, float(i % 3 - 1) * 0.8, off), loadout, hull_class)
 		p.heading = Vector3(1, 0, 0)
 		ships.append(p)
 		uid += 1
 	for i in n_per_side:
-		var off := (float(i) - (n_per_side - 1) / 2.0) * 4.0
+		var off := (float(i) - (n_per_side - 1) / 2.0) * spacing
 		var e := Model.ShipModel.new(uid, "E-%02d" % (i + 1), "enemy",
-			Vector3(30.0, float(i % 3 - 1) * 0.8, -off), loadout)
+			Vector3(32.0, float(i % 3 - 1) * 0.8, -off), Model.default_loadout(enemy_hull), enemy_hull)
 		e.heading = Vector3(-1, 0, 0)
 		ships.append(e)
 		uid += 1

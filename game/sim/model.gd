@@ -150,63 +150,148 @@ static func comp_color(kind: int) -> Color:
 		CompType.SENSOR:   return Color(0.55, 0.85, 0.90)
 	return Color.WHITE
 
-# 舰体硬点：坐标是舰体局部坐标（+Z 舰首，+Y 上，+X 右），dir 是外法线。
-# 几何先定，舱位跟着舰体走——这是"军舰设计"而不是"圆环上摆格子"。
-# 16 个硬点按舰船分区布置：舰首、背脊、两舷、腹部、舰桥、引擎、弹药库。
-const HARDPOINTS: Array = [
-	[Vector3(0.0, 0.25, 5.10), Vector3(0, 0.12, 1)],     # 0  舰首主炮
-	[Vector3(0.0, 0.62, 3.60), Vector3(0, 1, 0.25)],     # 1  前部炮塔
-	[Vector3(0.0, 0.86, 1.80), Vector3(0, 1, 0.10)],     # 2  背塔 A
-	[Vector3(0.0, 0.86, 0.10), Vector3(0, 1, 0)],        # 3  背塔 B
-	[Vector3(0.0, 0.86, -1.60), Vector3(0, 1, -0.10)],   # 4  背塔 C
-	[Vector3(-1.72, 0.05, 2.60), Vector3(-1, 0, 0)],     # 5  左舷炮组 A
-	[Vector3(-1.72, 0.05, 0.20), Vector3(-1, 0, 0)],     # 6  左舷炮组 B
-	[Vector3(1.72, 0.05, 2.60), Vector3(1, 0, 0)],       # 7  右舷炮组 A
-	[Vector3(1.72, 0.05, 0.20), Vector3(1, 0, 0)],       # 8  右舷炮组 B
-	[Vector3(0.0, -0.78, 2.40), Vector3(0, -1, 0.15)],   # 9  腹部炮塔 A
-	[Vector3(0.0, -0.78, -0.40), Vector3(0, -1, 0.05)],  # 10 腹部炮塔 B
-	[Vector3(0.0, 1.55, -2.20), Vector3(0, 1, 0)],       # 11 舰桥
-	[Vector3(0.0, 1.20, -3.60), Vector3(0, 1, 0)],       # 12 传感器阵列
-	[Vector3(-0.92, 0.0, -5.20), Vector3(0, 0, -1)],     # 13 左引擎组
-	[Vector3(0.92, 0.0, -5.20), Vector3(0, 0, -1)],      # 14 右引擎组
-	[Vector3(0.0, 0.30, -4.20), Vector3(0, 1, 0)],       # 15 弹药库
+# 舰级：三种舰体，各有独立硬点布局、尺寸与默认装配。
+# 硬点坐标是舰体局部坐标（+Z 舰首，+Y 上，+X 右），dir 是外法线。
+
+enum HullClass { CRUISER, BATTLESHIP, CARRIER }
+
+const HULLS: Array = [
+	# ---------------- 0 巡洋舰：均衡、快 ----------------
+	{
+		"name": "巡洋舰",
+		"desc": "16 个硬点，速度快，适合机动与远程压制",
+		"length": 13.0, "width": 3.4, "height": 1.10,
+		"speed_mult": 1.12,
+		"hardpoints": [
+			[Vector3(0.0, 0.25, 5.10), Vector3(0, 0.12, 1)],
+			[Vector3(0.0, 0.62, 3.60), Vector3(0, 1, 0.25)],
+			[Vector3(0.0, 0.86, 1.80), Vector3(0, 1, 0.10)],
+			[Vector3(0.0, 0.86, 0.10), Vector3(0, 1, 0)],
+			[Vector3(0.0, 0.86, -1.60), Vector3(0, 1, -0.10)],
+			[Vector3(-1.72, 0.05, 2.60), Vector3(-1, 0, 0)],
+			[Vector3(-1.72, 0.05, 0.20), Vector3(-1, 0, 0)],
+			[Vector3(1.72, 0.05, 2.60), Vector3(1, 0, 0)],
+			[Vector3(1.72, 0.05, 0.20), Vector3(1, 0, 0)],
+			[Vector3(0.0, -0.78, 2.40), Vector3(0, -1, 0.15)],
+			[Vector3(0.0, -0.78, -0.40), Vector3(0, -1, 0.05)],
+			[Vector3(0.0, 1.55, -2.20), Vector3(0, 1, 0)],
+			[Vector3(0.0, 1.20, -3.60), Vector3(0, 1, 0)],
+			[Vector3(-0.92, 0.0, -5.20), Vector3(0, 0, -1)],
+			[Vector3(0.92, 0.0, -5.20), Vector3(0, 0, -1)],
+			[Vector3(0.0, 0.30, -4.20), Vector3(0, 1, 0)],
+		],
+		"names": ["舰首炮", "前塔", "背塔A", "背塔B", "背塔C", "左舷A", "左舷B",
+			"右舷A", "右舷B", "腹塔A", "腹塔B", "舰桥", "传感阵", "引擎L", "引擎R", "弹药库"],
+		"default": [
+			CompType.WEAPON_LONG, CompType.WEAPON, CompType.WEAPON, CompType.WEAPON,
+			CompType.WEAPON, CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE,
+			CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE, CompType.SHIELD,
+			CompType.SHIELD, CompType.SENSOR, CompType.CREW,
+			CompType.ENGINE, CompType.ENGINE, CompType.MAGAZINE,
+		],
+	},
+	# ---------------- 1 战列舰：重甲、多炮、慢 ----------------
+	{
+		"name": "战列舰",
+		"desc": "20 个硬点，厚重装甲与三座主炮塔，速度慢",
+		"length": 17.0, "width": 4.6, "height": 1.55,
+		"speed_mult": 0.82,
+		"hardpoints": [
+			[Vector3(0.0, 0.30, 6.80), Vector3(0, 0.10, 1)],
+			[Vector3(0.0, 0.80, 5.00), Vector3(0, 1, 0.22)],
+			[Vector3(0.0, 1.05, 2.90), Vector3(0, 1, 0.10)],
+			[Vector3(0.0, 1.05, 0.80), Vector3(0, 1, 0)],
+			[Vector3(0.0, 1.05, -1.30), Vector3(0, 1, -0.08)],
+			[Vector3(0.0, 1.05, -3.20), Vector3(0, 1, -0.15)],
+			[Vector3(-2.10, 0.05, 3.60), Vector3(-1, 0, 0)],
+			[Vector3(-2.10, 0.05, 1.30), Vector3(-1, 0, 0)],
+			[Vector3(-2.10, 0.05, -1.00), Vector3(-1, 0, 0)],
+			[Vector3(2.10, 0.05, 3.60), Vector3(1, 0, 0)],
+			[Vector3(2.10, 0.05, 1.30), Vector3(1, 0, 0)],
+			[Vector3(2.10, 0.05, -1.00), Vector3(1, 0, 0)],
+			[Vector3(0.0, -0.95, 3.20), Vector3(0, -1, 0.12)],
+			[Vector3(0.0, -0.95, -0.60), Vector3(0, -1, 0.04)],
+			[Vector3(0.0, 1.95, -2.90), Vector3(0, 1, 0)],
+			[Vector3(0.0, 1.45, -4.80), Vector3(0, 1, 0)],
+			[Vector3(-1.15, 0.0, -6.70), Vector3(0, 0, -1)],
+			[Vector3(0.0, 0.0, -6.70), Vector3(0, 0, -1)],
+			[Vector3(1.15, 0.0, -6.70), Vector3(0, 0, -1)],
+			[Vector3(0.0, 0.35, -5.40), Vector3(0, 1, 0)],
+		],
+		"names": ["舰首炮", "前塔", "背塔A", "背塔B", "背塔C", "背塔D",
+			"左舷A", "左舷B", "左舷C", "右舷A", "右舷B", "右舷C",
+			"腹塔A", "腹塔B", "舰桥", "传感阵", "引擎L", "引擎C", "引擎R", "弹药库"],
+		"default": [
+			CompType.WEAPON_LONG, CompType.WEAPON_LONG, CompType.WEAPON, CompType.WEAPON,
+			CompType.WEAPON, CompType.WEAPON, CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE,
+			CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE,
+			CompType.SHIELD, CompType.SHIELD, CompType.SENSOR, CompType.CREW,
+			CompType.ENGINE, CompType.ENGINE, CompType.ENGINE, CompType.MAGAZINE,
+		],
+	},
+	# ---------------- 2 航母：平甲板、岛式舰桥、防空炮位 ----------------
+	{
+		"name": "航母",
+		"desc": "14 个硬点，宽阔平甲板与岛式舰桥，靠舰载机与防空作战",
+		"length": 16.0, "width": 5.6, "height": 0.95,
+		"speed_mult": 0.95,
+		"hardpoints": [
+			[Vector3(0.0, 0.35, 6.20), Vector3(0, 0.10, 1)],
+			[Vector3(-2.45, 0.40, 3.20), Vector3(-1, 0.2, 0)],
+			[Vector3(2.45, 0.40, 3.20), Vector3(1, 0.2, 0)],
+			[Vector3(-2.45, 0.40, 0.20), Vector3(-1, 0.2, 0)],
+			[Vector3(2.45, 0.40, 0.20), Vector3(1, 0.2, 0)],
+			[Vector3(-2.45, 0.40, -2.80), Vector3(-1, 0.2, 0)],
+			[Vector3(2.45, 0.40, -2.80), Vector3(1, 0.2, 0)],
+			[Vector3(1.95, 1.85, -1.10), Vector3(0, 1, 0)],
+			[Vector3(1.95, 1.55, -2.60), Vector3(0, 1, 0)],
+			[Vector3(0.0, -0.85, 2.20), Vector3(0, -1, 0.10)],
+			[Vector3(0.0, -0.85, -2.20), Vector3(0, -1, 0.05)],
+			[Vector3(-1.25, 0.0, -6.30), Vector3(0, 0, -1)],
+			[Vector3(1.25, 0.0, -6.30), Vector3(0, 0, -1)],
+			[Vector3(0.0, 0.55, -4.40), Vector3(0, 1, 0)],
+		],
+		"names": ["舰首近防", "左舷A", "右舷A", "左舷B", "右舷B", "左舷C", "右舷C",
+			"舰桥", "传感阵", "腹塔A", "腹塔B", "引擎L", "引擎R", "弹药库"],
+		"default": [
+			CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE,
+			CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE,
+			CompType.WEAPON_CLOSE, CompType.SENSOR, CompType.SENSOR,
+			CompType.SHIELD, CompType.SHIELD, CompType.ENGINE, CompType.ENGINE,
+			CompType.MAGAZINE,
+		],
+	},
 ]
 
-static func hardpoint_pos(i: int) -> Vector3:
-	return HARDPOINTS[i][0]
+static func hull_data(cls: int) -> Dictionary:
+	return HULLS[cls]
 
-static func hardpoint_dir(i: int) -> Vector3:
-	return HARDPOINTS[i][1]
+static func hull_name(cls: int) -> String:
+	return HULLS[cls]["name"]
 
-static func hardpoint_name(i: int) -> String:
-	match i:
-		0: return "舰首炮"
-		1: return "前塔"
-		2: return "背塔A"
-		3: return "背塔B"
-		4: return "背塔C"
-		5: return "左舷A"
-		6: return "左舷B"
-		7: return "右舷A"
-		8: return "右舷B"
-		9: return "腹塔A"
-		10: return "腹塔B"
-		11: return "舰桥"
-		12: return "传感阵"
-		13: return "引擎L"
-		14: return "引擎R"
-		15: return "弹药库"
+static func hull_desc(cls: int) -> String:
+	return HULLS[cls]["desc"]
+
+static func slot_count(cls: int) -> int:
+	return HULLS[cls]["hardpoints"].size()
+
+static func hardpoint_pos(cls: int, i: int) -> Vector3:
+	return HULLS[cls]["hardpoints"][i][0]
+
+static func hardpoint_dir(cls: int, i: int) -> Vector3:
+	return HULLS[cls]["hardpoints"][i][1]
+
+static func hardpoint_name(cls: int, i: int) -> String:
+	var names: Array = HULLS[cls]["names"]
+	if i >= 0 and i < names.size():
+		return names[i]
 	return "舱位"
 
-# 默认装配：舰首长程炮、背脊三激光、两舷近防、腹塔护盾、舰桥传感器、双引擎、弹药库。
-static func default_loadout() -> Array:
-	return [
-		CompType.WEAPON_LONG, CompType.WEAPON, CompType.WEAPON, CompType.WEAPON,
-		CompType.WEAPON, CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE,
-		CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE, CompType.SHIELD,
-		CompType.SHIELD, CompType.SENSOR, CompType.CREW,
-		CompType.ENGINE, CompType.ENGINE, CompType.MAGAZINE,
-	]
+static func default_loadout(cls: int = HullClass.CRUISER) -> Array:
+	return HULLS[cls]["default"].duplicate()
+
+static func hull_speed_mult(cls: int) -> float:
+	return float(HULLS[cls]["speed_mult"])
 
 
 class Compartment:
@@ -295,6 +380,7 @@ class ShipModel:
 	var uid: int
 	var ship_name: String
 	var team: String
+	var hull_class: int = Model.HullClass.CRUISER
 	var pos := Vector3.ZERO
 	var heading := Vector3(0, 0, 1)
 	var compartments: Array = []
@@ -318,15 +404,17 @@ class ShipModel:
 		energy = maxf(0.0, energy - cost)
 
 	func _init(p_uid: int, p_name: String, p_team: String, p_pos: Vector3,
-			loadout: Array = []) -> void:
+			loadout: Array = [], p_hull: int = Model.HullClass.CRUISER) -> void:
 		uid = p_uid
 		ship_name = p_name
 		team = p_team
 		pos = p_pos
-		var kinds: Array = loadout if loadout.size() == Model.SLOT_COUNT else Model.default_loadout()
-		for i in Model.SLOT_COUNT:
+		hull_class = p_hull
+		var n := Model.slot_count(p_hull)
+		var kinds: Array = loadout if loadout.size() == n else Model.default_loadout(p_hull)
+		for i in n:
 			compartments.append(Compartment.new(
-				i, kinds[i], Model.hardpoint_pos(i), Model.hardpoint_dir(i)))
+				i, kinds[i], Model.hardpoint_pos(p_hull, i), Model.hardpoint_dir(p_hull, i)))
 
 	func alive() -> bool:
 		for c in compartments:
@@ -349,7 +437,7 @@ class ShipModel:
 		return maxf(1.0, n)
 
 	func speed() -> float:
-		var base := 1.6
+		var base := 1.6 * Model.hull_speed_mult(hull_class)
 		var engines := _sum_eff(Model.CompType.ENGINE)
 		if engines <= 0.0:
 			return base * 0.15
