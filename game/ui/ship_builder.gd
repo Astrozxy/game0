@@ -12,6 +12,8 @@ var slot_buttons: Array = []
 var stats_label: Label
 var band_buttons: Dictionary = {}
 var hull_buttons: Array = []
+var slot_positions: Array = []   # 按钮的松弛后位置
+var slot_anchors: Array = []     # 对应硬点的真实位置
 
 # 战斗手册：玩家定的"想在哪打"。舰长在这条范围里自行决定怎么打。
 var doctrine := {
@@ -38,9 +40,13 @@ func _ready() -> void:
 func _build_ui() -> void:
 	var W: float = size.x
 	var H: float = size.y
-	slot_size = clampf(minf(W, H) * 0.050, 32.0, 48.0)
-	center_pos = Vector2(W * 0.27, H * 0.53)
-	hp_scale = minf(W, H) * 0.037
+	var hd := Model.hull_data(hull_class)
+	center_pos = Vector2(W * 0.27, H * 0.50)
+	# 让整艘舰落在左侧区域里：取高度与宽度约束中更紧的一个
+	var avail_h: float = H * 0.52
+	var avail_w: float = W * 0.34
+	hp_scale = minf(avail_h / float(hd["length"]), avail_w / float(hd["width"]))
+	slot_size = clampf(hp_scale * 0.95, 20.0, 34.0)
 
 	var bg := ColorRect.new()
 	bg.color = Color(0.04, 0.05, 0.07)
@@ -49,15 +55,34 @@ func _build_ui() -> void:
 
 	var title := Label.new()
 	title.text = "EMBERFALL · 配船"
-	title.position = Vector2(W * 0.035, H * 0.045)
-	title.add_theme_font_size_override("font_size", 32)
+	title.position = Vector2(W * 0.035, H * 0.040)
+	title.add_theme_font_size_override("font_size", 30)
 	title.add_theme_color_override("font_color", Color(0.92, 0.94, 0.97))
 	add_child(title)
 
+	# 舰级选择
+	var hy := H * 0.098
+	for i in Model.HULLS.size():
+		var hb := Button.new()
+		hb.text = Model.hull_name(i)
+		hb.size = Vector2(112, 38)
+		hb.position = Vector2(W * 0.035 + float(i) * 122.0, hy)
+		hb.add_theme_font_size_override("font_size", 16)
+		var on: bool = (i == hull_class)
+		hb.add_theme_stylebox_override("normal", _flat(
+			Color(0.18, 0.30, 0.42) if on else Color(0.12, 0.14, 0.18)))
+		hb.add_theme_stylebox_override("hover", _flat(Color(0.22, 0.26, 0.32)))
+		hb.add_theme_stylebox_override("pressed", _flat(Color(0.26, 0.34, 0.44)))
+		hb.add_theme_color_override("font_color", Color(0.92, 0.95, 0.98))
+		hb.pressed.connect(_select_hull.bind(i))
+		add_child(hb)
+		hull_buttons.append(hb)
+
 	var hint := Label.new()
-	hint.text = "俯视图：上方是舰首。点击按钮切换该位置的舱室类型。"
-	hint.position = Vector2(W * 0.035, H * 0.105)
-	hint.add_theme_font_size_override("font_size", 14)
+	hint.text = "%s —— %s。俯视图：上方是舰首，点击按钮切换舱室类型。" % [
+		Model.hull_name(hull_class), Model.hull_desc(hull_class)]
+	hint.position = Vector2(W * 0.035, H * 0.152)
+	hint.add_theme_font_size_override("font_size", 13)
 	hint.add_theme_color_override("font_color", Color(0.55, 0.60, 0.66))
 	add_child(hint)
 
@@ -68,11 +93,37 @@ func _build_ui() -> void:
 	core.add_theme_color_override("font_color", Color(0.85, 0.88, 0.92))
 	add_child(core)
 
-	for i in Model.slot_count(hull_class):
+	# 硬点靠得很近时按钮会互相压住：做几轮松弛把它们推开，
+	# 再用引线连回真实硬点，位置关系依然准确。
+	var n_slots := Model.slot_count(hull_class)
+	var anchor: Array = []
+	var slot_pos: Array = []
+	for i in n_slots:
+		var ap: Vector2 = hardpoint_screen(i)
+		anchor.append(ap)
+		slot_pos.append(ap)
+	var min_d: float = slot_size * 1.12
+	for _iter in 16:
+		for a in n_slots:
+			for b in range(a + 1, n_slots):
+				var d: Vector2 = slot_pos[b] - slot_pos[a]
+				var dist: float = d.length()
+				if dist < min_d:
+					if dist < 0.01:
+						d = Vector2(0.0, 1.0)
+						dist = 1.0
+					var push: float = (min_d - dist) * 0.5
+					var dir: Vector2 = d / dist
+					slot_pos[a] -= dir * push
+					slot_pos[b] += dir * push
+	slot_anchors = anchor
+	slot_positions = slot_pos
+
+	for i in n_slots:
 		var btn := Button.new()
 		btn.size = Vector2(slot_size, slot_size)
 		btn.custom_minimum_size = Vector2(slot_size, slot_size)
-		btn.position = hardpoint_screen(i) - Vector2(slot_size, slot_size) * 0.5
+		btn.position = slot_pos[i] - Vector2(slot_size, slot_size) * 0.5
 		btn.add_theme_font_size_override("font_size", maxf(9.0, slot_size * 0.145))
 		btn.pressed.connect(_cycle_slot.bind(i))
 		add_child(btn)
@@ -80,14 +131,18 @@ func _build_ui() -> void:
 
 	# ---- 右侧：性能面板 ----
 	var panel_w: float = minf(W * 0.40, 620.0)
-	var panel := PanelContainer.new()
+	var panel_h: float = H * 0.44
+	var panel := Panel.new()
 	panel.position = Vector2(W - panel_w - W * 0.02, H * 0.10)
-	panel.size = Vector2(panel_w, H * 0.46)
+	panel.size = Vector2(panel_w, panel_h)
 	panel.add_theme_stylebox_override("panel", _panel_style())
 	add_child(panel)
 
 	stats_label = Label.new()
-	stats_label.add_theme_font_size_override("font_size", 15)
+	stats_label.position = Vector2(20, 16)
+	stats_label.size = Vector2(panel_w - 40, panel_h - 32)
+	stats_label.clip_text = true
+	stats_label.add_theme_font_size_override("font_size", 13)
 	stats_label.add_theme_color_override("font_color", Color(0.86, 0.89, 0.93))
 	stats_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 	stats_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -144,7 +199,7 @@ func _build_ui() -> void:
 	launch_btn.add_theme_stylebox_override("normal", _flat(Color(0.72, 0.26, 0.12)))
 	launch_btn.add_theme_stylebox_override("hover", _flat(Color(0.85, 0.34, 0.16)))
 	launch_btn.add_theme_stylebox_override("pressed", _flat(Color(0.60, 0.20, 0.09)))
-	launch_btn.pressed.connect(func(): launch.emit(loadout.duplicate(), doctrine.duplicate()))
+	launch_btn.pressed.connect(func(): launch.emit(loadout.duplicate(), doctrine.duplicate(), hull_class))
 	add_child(launch_btn)
 
 func _cycle_slot(i: int) -> void:
@@ -154,6 +209,22 @@ func _cycle_slot(i: int) -> void:
 func _set_band(band: String) -> void:
 	doctrine["fire_band"] = band
 	_refresh()
+
+## 切换舰级：槽位数量与布局都会变，整体重建界面
+func _select_hull(cls: int) -> void:
+	if cls == hull_class:
+		return
+	hull_class = cls
+	loadout = Model.default_loadout(cls)
+	for c in get_children():
+		c.queue_free()
+	slot_buttons.clear()
+	hull_buttons.clear()
+	band_buttons.clear()
+	stats_label = null
+	_build_ui()
+	_refresh()
+	queue_redraw()
 
 func _refresh() -> void:
 	for i in slot_buttons.size():
@@ -257,7 +328,10 @@ func _panel_style() -> StyleBoxFlat:
 	return s
 
 func _draw() -> void:
-	# 舰体俯视轮廓：上方舰首，下方舰尾
+	# 舰体俯视轮廓：上方舰首，下方舰尾。按舰级尺寸缩放。
+	var hd := Model.hull_data(hull_class)
+	var wx: float = float(hd["width"]) / 3.4
+	var wz: float = float(hd["length"]) / 13.0
 	var outline: Array = [
 		Vector2(0.0, 6.4), Vector2(0.40, 5.4), Vector2(0.95, 4.4),
 		Vector2(1.35, 3.2), Vector2(1.62, 1.0), Vector2(1.55, -3.6),
@@ -267,13 +341,21 @@ func _draw() -> void:
 	]
 	var pts: PackedVector2Array = PackedVector2Array()
 	for p in outline:
-		pts.append(center_pos + Vector2(p.x * hp_scale, -p.y * hp_scale))
+		pts.append(center_pos + Vector2(p.x * wx * hp_scale, -p.y * wz * hp_scale))
 	draw_colored_polygon(pts, Color(0.10, 0.12, 0.16))
 	pts.append(pts[0])
 	draw_polyline(pts, Color(0.30, 0.36, 0.44), 2.0, true)
 
 	# 中轴线
-	var a := center_pos + Vector2(0, 4.9 * hp_scale)
-	var b := center_pos + Vector2(0, -4.5 * hp_scale)
+	var a := center_pos + Vector2(0, 4.9 * wz * hp_scale)
+	var b := center_pos + Vector2(0, -4.5 * wz * hp_scale)
 	draw_dashed_line(a, b, Color(0.22, 0.26, 0.32), 1.0, 8.0)
-	draw_arc(center_pos, slot_size * 0.55, 0, TAU, 64, Color(0.40, 0.44, 0.50), 2.0, true)
+
+	# 按钮与真实硬点之间的引线 + 硬点标记
+	for i in slot_positions.size():
+		if i >= slot_anchors.size():
+			break
+		var sp: Vector2 = slot_positions[i]
+		var ap: Vector2 = slot_anchors[i]
+		draw_line(sp, ap, Color(0.28, 0.34, 0.42), 1.0, true)
+		draw_circle(ap, 2.5, Color(0.55, 0.66, 0.80))

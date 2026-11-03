@@ -36,6 +36,8 @@ var crew_mm_node: MultiMeshInstance3D = null
 var turret_nodes: Dictionary = {}    # "uid:index" -> 可旋转的炮塔节点
 var turret_pods: Dictionary = {}     # "uid:index" -> 炮塔所在的 pod（用于换算朝向）
 var ship_mats: Dictionary = {}       # uid -> 共用材质集
+var comp_base_colors: Dictionary = {}
+var comp_base_emission: Dictionary = {}
 var player_hull: int = Model.HullClass.CRUISER
 var commanded_hull: int = Model.HullClass.CRUISER
 var beam_mesh: ImmediateMesh
@@ -424,7 +426,8 @@ func _add_torus(parent: Node3D, inner: float, outer: float, pos: Vector3,
 # 目标是"能看出里面在干什么"，这样后面才能做对应的击中效果。
 
 func _build_pod(node: Node3D, ship, comp) -> void:
-	var mats := _mats_for(ship)
+	# 每个舱室用一份自己的材质副本，这样受损/摧毁时能单独变色
+	var mats: Dictionary = _mats_for(ship).duplicate()
 	var type_col := Model.comp_color(comp.kind)
 	var pod := Node3D.new()
 	pod.position = comp.local_pos
@@ -456,7 +459,18 @@ func _build_pod(node: Node3D, ship, comp) -> void:
 		Model.CompType.MAGAZINE:
 			_build_magazine(pod, mats)
 
-	comp_mats["%d:%d" % [ship.uid, comp.index]] = base_mat
+	var tint: Array = [
+		base_mat, mats["detail"], mats["plate"], mats["accent"],
+		mats["glow"], mats["warn"], mats["glass"]]
+	var key := "%d:%d" % [ship.uid, comp.index]
+	comp_mats[key] = tint
+	var cols: Array = []
+	var emis: Array = []
+	for m in tint:
+		cols.append(m.albedo_color)
+		emis.append(m.emission)
+	comp_base_colors[key] = cols
+	comp_base_emission[key] = emis
 
 # ---------------------------------------------------------------- 各类型功能件
 
@@ -997,24 +1011,36 @@ func _sync_ships() -> void:
 		node.transform.basis = ship.basis()
 		node.visible = ship.alive()
 		for comp in ship.compartments:
-			var mat: StandardMaterial3D = comp_mats.get("%d:%d" % [ship.uid, comp.index])
-			if mat == null:
-				continue
-			if comp.state == Model.CompState.OFFLINE:
-				mat.albedo_color = Color(0.08, 0.08, 0.10)
-				mat.emission = Color(0, 0, 0)
-			elif comp.state == Model.CompState.DAMAGED:
-				mat.albedo_color = Color(0.85, 0.45, 0.15)
-				mat.emission = Color(0.65, 0.22, 0.0) * 0.55
-			else:
-				mat.albedo_color = Model.comp_color(comp.kind)
-				mat.emission = Model.comp_color(comp.kind) * 0.25
+			var key := "%d:%d" % [ship.uid, comp.index]
+			var mats_list: Array = comp_mats.get(key, [])
+			var cols: Array = comp_base_colors.get(key, [])
+			var emis: Array = comp_base_emission.get(key, [])
+			for j in mats_list.size():
+				var mat: StandardMaterial3D = mats_list[j]
+				if mat == null:
+					continue
+				var base_col: Color = cols[j] if j < cols.size() else Color(0.3, 0.3, 0.3)
+				var base_emi: Color = emis[j] if j < emis.size() else Color(0, 0, 0)
+				if comp.state == Model.CompState.OFFLINE:
+					mat.albedo_color = Color(0.07, 0.07, 0.09)
+					mat.emission = Color(0, 0, 0)
+				elif comp.state == Model.CompState.DAMAGED:
+					# 轻微烧灼：保留原色，只往焦褐色偏一点
+					mat.albedo_color = base_col.lerp(Color(0.45, 0.26, 0.12), 0.45)
+					mat.emission = base_emi * 0.55
+				else:
+					mat.albedo_color = base_col
+					mat.emission = base_emi
 
 			# 舱室被打爆的那一瞬间：附近船员四散 / 被抛出
-			var key := "%d:%d" % [ship.uid, comp.index]
 			var prev: int = prev_comp_state.get(key, Model.CompState.ONLINE)
 			if comp.state == Model.CompState.OFFLINE and prev != Model.CompState.OFFLINE:
 				_panic_near(ship, comp)
+				# 被打爆的炮塔：炮管垂下来，像卡死了
+				var yaw: Node3D = turret_nodes.get(key)
+				if yaw != null:
+					yaw.rotation.z = 0.9
+					yaw.scale = Vector3(0.86, 0.86, 0.86)
 			prev_comp_state[key] = comp.state
 		_update_damage_emitter(ship, node)
 
