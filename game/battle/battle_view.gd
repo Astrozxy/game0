@@ -210,6 +210,27 @@ func _build_hull(node: Node3D, ship) -> void:
 		var glow := _add_cyl(node, 0.26, 0.26, 0.10, Vector3(ex, 0, -6.40), accent_mat, 10)
 		glow.rotation_degrees = Vector3(90, 0, 0)
 
+	# ---- 引擎尾焰（半透明锥体，让舰船看起来在推进）----
+	for ex in [-0.92, 0.92]:
+		var plume := MeshInstance3D.new()
+		var cone := CylinderMesh.new()
+		cone.top_radius = 0.24
+		cone.bottom_radius = 0.02
+		cone.height = 1.5
+		cone.radial_segments = 10
+		plume.mesh = cone
+		plume.position = Vector3(ex, 0, -6.35 - 0.75)
+		plume.rotation_degrees = Vector3(-90, 0, 0)
+		var pm := StandardMaterial3D.new()
+		pm.albedo_color = Color(accent.r, accent.g, accent.b, 0.22)
+		pm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		pm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		pm.emission_enabled = true
+		pm.emission = accent * 0.9
+		pm.cull_mode = BaseMaterial3D.CULL_DISABLED
+		plume.material_override = pm
+		node.add_child(plume)
+
 	# ---- 舷侧装甲带与灯带 ----
 	for sx in [-1.58, 1.58]:
 		_add_box(node, Vector3(0.14, 0.62, 5.2), Vector3(sx, -0.02, 0.9), plate_mat)
