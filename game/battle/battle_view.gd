@@ -33,6 +33,8 @@ var prev_comp_state: Dictionary = {} # "uid:index" -> 上一帧状态（用于�
 var crew_data: Array = []            # 每个船员一条：{ship, idx, pos, target, timer, ...}
 var crew_mm: MultiMesh = null
 var crew_mm_node: MultiMeshInstance3D = null
+var turret_nodes: Dictionary = {}    # "uid:index" -> 可旋转的炮塔节点
+var turret_pods: Dictionary = {}     # "uid:index" -> 炮塔所在的 pod（用于换算朝向）
 var beam_mesh: ImmediateMesh
 
 var cam: Camera3D
@@ -267,7 +269,10 @@ func _build_pod(node: Node3D, ship, comp) -> void:
 
 	match comp.kind:
 		Model.CompType.WEAPON, Model.CompType.WEAPON_LONG, Model.CompType.WEAPON_CLOSE:
-			_build_turret(pod, comp.kind, detail_mat, _emissive(accent))
+			var yaw := _build_turret(pod, comp.kind, detail_mat, _emissive(accent))
+			var key := "%d:%d" % [ship.uid, comp.index]
+			turret_nodes[key] = yaw
+			turret_pods[key] = pod
 		Model.CompType.ENGINE:
 			var noz := _add_cyl(pod, 0.22, 0.28, 0.42, Vector3(0, 0, -0.45), detail_mat, 10)
 			noz.rotation_degrees = Vector3(90, 0, 0)
@@ -297,27 +302,35 @@ func _build_pod(node: Node3D, ship, comp) -> void:
 
 	comp_mats["%d:%d" % [ship.uid, comp.index]] = base_mat
 
-## 炮塔：三种武器三种形态。
-## 长程炮 = 双联重炮（带制退器和后座）；近防炮 = 六管加特林；
-## 激光 = 细长单管 + 发光镜口。
-func _build_turret(pod: Node3D, kind: int, mat: StandardMaterial3D, glow: StandardMaterial3D) -> void:
-	# 通用：环形炮座 + 炮塔壳体
-	_add_cyl(pod, 0.27, 0.31, 0.10, Vector3(0, 0.32, 0), mat, 12)
-	_add_box(pod, Vector3(0.44, 0.20, 0.42), Vector3(0, 0.42, 0), mat)
+## 炮塔：三种武器三种形态，并且可以绕安装面旋转跟踪目标。
+## 结构：pod（+Z = 外法线）→ yaw（绕 +Z 旋转）→ inner（-90°X，让炮管沿 +Y）
+## 因此 yaw.rotation.z 就是"水平扫射"。
+func _build_turret(pod: Node3D, kind: int, mat: StandardMaterial3D, glow: StandardMaterial3D) -> Node3D:
+	# 通用：不动的环形炮座
+	_add_cyl(pod, 0.28, 0.32, 0.10, Vector3(0, 0.30, 0), mat, 12)
+
+	var yaw := Node3D.new()
+	yaw.position = Vector3(0, 0.38, 0)
+	pod.add_child(yaw)
+
+	var inner := Node3D.new()
+	inner.rotation_degrees = Vector3(-90, 0, 0)
+	yaw.add_child(inner)
+
+	_add_box(inner, Vector3(0.44, 0.20, 0.42), Vector3.ZERO, mat)
 
 	match kind:
 		Model.CompType.WEAPON_LONG:
 			# 双联重炮
 			for sx in [-0.12, 0.12]:
-				_add_box(pod, Vector3(0.085, 0.085, 1.30), Vector3(sx, 0.44, 0.60), mat)
-				_add_box(pod, Vector3(0.13, 0.13, 0.16), Vector3(sx, 0.44, 1.26), mat)
-				_add_box(pod, Vector3(0.16, 0.16, 0.10), Vector3(sx, 0.44, 1.36), mat)
+				_add_box(inner, Vector3(0.085, 0.085, 1.30), Vector3(sx, 0.04, 0.60), mat)
+				_add_box(inner, Vector3(0.13, 0.13, 0.16), Vector3(sx, 0.04, 1.26), mat)
+				_add_box(inner, Vector3(0.16, 0.16, 0.10), Vector3(sx, 0.04, 1.36), mat)
 			# 后座与俯仰轴
-			_add_box(pod, Vector3(0.34, 0.12, 0.24), Vector3(0, 0.55, -0.06), mat)
-			_add_cyl(pod, 0.05, 0.05, 0.50, Vector3(0, 0.52, 0.18), mat, 8).rotation_degrees = Vector3(0, 0, 90)
+			_add_box(inner, Vector3(0.34, 0.12, 0.24), Vector3(0, 0.15, -0.06), mat)
 			# 供弹臂
 			for sx2 in [-0.26, 0.26]:
-				_add_box(pod, Vector3(0.06, 0.10, 0.34), Vector3(sx2, 0.36, -0.12), mat)
+				_add_box(inner, Vector3(0.06, 0.10, 0.34), Vector3(sx2, -0.04, -0.12), mat)
 
 		Model.CompType.WEAPON_CLOSE:
 			# 六管加特林
@@ -325,25 +338,57 @@ func _build_turret(pod: Node3D, kind: int, mat: StandardMaterial3D, glow: Standa
 				var ang := TAU * float(i) / 6.0
 				var px := cos(ang) * 0.052
 				var py := sin(ang) * 0.052
-				_add_box(pod, Vector3(0.026, 0.026, 0.66), Vector3(px, 0.44 + py, 0.38), mat)
-			# 旋转鼓
-			_add_cyl(pod, 0.11, 0.11, 0.14, Vector3(0, 0.44, 0.14), mat, 10).rotation_degrees = Vector3(-90, 0, 0)
+				_add_box(inner, Vector3(0.026, 0.026, 0.66), Vector3(px, 0.04 + py, 0.38), mat)
+			_add_cyl(inner, 0.11, 0.11, 0.14, Vector3(0, 0.04, 0.14), mat, 10).rotation_degrees = Vector3(-90, 0, 0)
 			# 顶部跟踪雷达
-			_add_box(pod, Vector3(0.02, 0.16, 0.02), Vector3(0, 0.60, -0.10), mat)
-			_add_box(pod, Vector3(0.13, 0.03, 0.09), Vector3(0, 0.68, -0.10), mat)
+			_add_box(inner, Vector3(0.02, 0.16, 0.02), Vector3(0, 0.20, -0.10), mat)
+			_add_box(inner, Vector3(0.13, 0.03, 0.09), Vector3(0, 0.28, -0.10), mat)
 
 		_:
 			# 单管激光
-			var barrel := _add_cyl(pod, 0.042, 0.058, 0.98, Vector3(0, 0.44, 0.52), mat, 8)
+			var barrel := _add_cyl(inner, 0.042, 0.058, 0.98, Vector3(0, 0.04, 0.52), mat, 8)
 			barrel.rotation_degrees = Vector3(-90, 0, 0)
-			var tip := _add_cyl(pod, 0.072, 0.072, 0.05, Vector3(0, 0.44, 1.01), glow, 8)
+			var tip := _add_cyl(inner, 0.072, 0.072, 0.05, Vector3(0, 0.04, 1.01), glow, 8)
 			tip.rotation_degrees = Vector3(-90, 0, 0)
 			# 冷却鳍片
 			for i in 3:
-				_add_box(pod, Vector3(0.16, 0.03, 0.10), Vector3(0, 0.50 + float(i) * 0.035, 0.18 + float(i) * 0.10), mat)
+				_add_box(inner, Vector3(0.16, 0.03, 0.10), Vector3(0, 0.10 + float(i) * 0.035, 0.18 + float(i) * 0.10), mat)
 			# 侧向配重
 			for sx3 in [-0.20, 0.20]:
-				_add_box(pod, Vector3(0.05, 0.12, 0.26), Vector3(sx3, 0.40, 0.04), mat)
+				_add_box(inner, Vector3(0.05, 0.12, 0.26), Vector3(sx3, 0.0, 0.04), mat)
+
+	return yaw
+
+## 炮塔跟踪最近的目标。纯表现层，不影响命中判定。
+func _update_turrets(delta: float) -> void:
+	if turret_nodes.is_empty():
+		return
+	for ship in sim.ships:
+		if not ship.alive():
+			continue
+		var enemies := sim.enemies_of(ship)
+		if enemies.is_empty():
+			continue
+		var tgt = enemies[0]
+		var best := INF
+		for e in enemies:
+			var dd: float = (e.pos - ship.pos).length()
+			if dd < best:
+				best = dd
+				tgt = e
+		for comp in ship.compartments:
+			if not Model.is_weapon(comp.kind) or not comp.alive():
+				continue
+			var key := "%d:%d" % [ship.uid, comp.index]
+			var yaw: Node3D = turret_nodes.get(key)
+			var pod: Node3D = turret_pods.get(key)
+			if yaw == null or pod == null:
+				continue
+			var from: Vector3 = ship.local_to_world(comp.local_pos)
+			var dir_world: Vector3 = (tgt.pos - from).normalized()
+			var d: Vector3 = pod.global_transform.basis.inverse() * dir_world
+			var ang: float = atan2(-d.x, d.y)
+			yaw.rotation.z = lerp_angle(yaw.rotation.z, ang, clampf(delta * 7.0, 0.0, 1.0))
 
 func _emissive(c: Color, strength := 0.9) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
@@ -432,10 +477,15 @@ func _build_crew_multimesh() -> void:
 			mm.set_instance_transform(idx, Transform3D(Basis(), Vector3(0, -900, 0)))
 			idx += 1
 
-## 甲板上一个随机待命点（贴近舰体表面）
+## 甲板上一个随机待命点（按舰体轮廓收窄，避免站到船外）
 func _idle_spot(ship) -> Vector3:
 	var z := randf_range(-4.8, 4.4)
-	var x := randf_range(-1.3, 1.3)
+	var half := 1.42
+	if z > 3.2:
+		half = lerpf(1.42, 0.22, clampf((z - 3.2) / 1.6, 0.0, 1.0))
+	elif z < -3.8:
+		half = lerpf(1.42, 0.85, clampf((-z - 3.8) / 1.0, 0.0, 1.0))
+	var x := randf_range(-half, half)
 	return Vector3(x, 0.56, z)
 
 ## 某个舱室旁边的一个落脚点（在装甲面上）
@@ -641,6 +691,7 @@ func _process(delta: float) -> void:
 			steps += 1
 
 	_sync_ships()
+	_update_turrets(delta)
 	_update_crew_mm(delta)
 	_update_camera_follow()
 	_sync_beams()
@@ -720,7 +771,11 @@ func _update_crew_mm(delta: float) -> void:
 				c["target"] = _random_crew_target(ship)
 				c["timer"] = randf_range(1.2, 3.5)
 		c["pos"] = pos
-		crew_mm.set_instance_transform(i, Transform3D(identity, ship.local_to_world(pos)))
+		# 朝向：面朝移动方向；站着不动时保持上一次朝向
+		if d.length() > 0.06:
+			c["yaw"] = atan2(d.x, d.z)
+		var b: Basis = ship.basis() * Basis(Vector3.UP, float(c.get("yaw", 0.0)))
+		crew_mm.set_instance_transform(i, Transform3D(b, ship.local_to_world(pos)))
 
 ## 随机目标：多数人往武器舱跑，少数在甲板待命
 func _random_crew_target(ship) -> Vector3:
