@@ -90,6 +90,7 @@ var doctrine := {
 
 var _cooldowns: Dictionary = {}   # "uid:index" -> 剩余秒
 var _rngs: Dictionary = {}        # uid -> RandomNumberGenerator（每舰独立随机流）
+var _assignments: Dictionary = {} # uid -> 本步分配的目标（避免重复打同一个）
 
 # 失压抛人事件：给表现层用，只负责"哪里、多少人"，逻辑层不关心怎么画。
 var ejections: Array = []
@@ -176,14 +177,23 @@ func step(dt: float) -> void:
 		order[i] = order[j]
 		order[j] = tmp
 
+	# 目标分配：先统一分配，再让所有舰按同一份分配去移动和开火。
+	# 否则"移动追一个目标、开火打另一个目标"会让阵型散掉。
+	_assignments = {}
+	for team in ["player", "enemy"]:
+		var a := assign_targets(team)
+		for k in a.keys():
+			_assignments[k] = a[k]
+
 	for idx in order:
 		var s = ships[idx]
 		if not s.alive():
 			continue
-		var target = pick_target(s)
-		if target != null:
-			turn_toward(s, target, dt)
-		move_ship(s, dt)
+		# 移动永远朝最近的敌人：集火只影响"打谁"，不该让整队挤向同一个点。
+		var mv = nearest_enemy(s)
+		if mv != null:
+			turn_toward(s, mv, dt)
+		move_ship(s, dt, mv)
 
 	for idx in order:
 		var s = ships[idx]
@@ -250,6 +260,52 @@ func _decide_by_hull() -> String:
 
 # ---------------------------------------------------------------- 目标
 
+## 本步的目标分配：同一轮里避免多舰重复攻击同一个目标（伤害溢出）。
+## 集火手册（focus=true）则故意不避让——那是玩家的选择，代价是浪费。
+func assign_targets(team: String) -> Dictionary:
+	var allied: Array = []
+	for s in ships:
+		if s.team == team and s.alive():
+			allied.append(s)
+
+	var crowd := {}   # 已被分配的目标 -> 数量
+	var out := {}     # ship.uid -> target
+	var focus_on: bool = doctrine[team]["focus"]
+
+	for s in allied:
+		var enemies := enemies_of(s)
+		if enemies.is_empty():
+			continue
+		var best = null
+		var best_score := INF
+		for e in enemies:
+			var d: float = (e.pos - s.pos).length()
+			var score: float
+			if focus_on:
+				# 集火：优先打最虚弱的
+				score = d * (0.4 + e.hull_integrity())
+			else:
+				# 分布式：已经在挨打的目标，优先级递减
+				var n: int = crowd.get(e.uid, 0)
+				score = d * (0.5 + e.hull_integrity()) * (1.0 + 0.9 * n)
+			# 打不到的目标大幅降权，避免全队追着一个够不着的目标跑
+			if not can_engage(s, e):
+				score *= 4.0
+			if score < best_score:
+				best_score = score
+				best = e
+		if best != null:
+			out[s.uid] = best
+			crowd[best.uid] = crowd.get(best.uid, 0) + 1
+	return out
+
+## 这艘船有没有任何一件武器能打到该目标（射程 + 最小射程 + 射界）。
+func can_engage(ship, target) -> bool:
+	for c in ship.weapons():
+		if weapon_can_hit(ship, c, target):
+			return true
+	return false
+
 func pick_target(ship):
 	var enemies := enemies_of(ship)
 	if enemies.is_empty():
@@ -272,6 +328,20 @@ func pick_target(ship):
 	var r: RandomNumberGenerator = _rngs[ship.uid]
 	return tied[r.randi_range(0, tied.size() - 1)]
 
+## 最近的敌人（只管移动，不管开火）。
+func nearest_enemy(ship):
+	var enemies := enemies_of(ship)
+	if enemies.is_empty():
+		return null
+	var best = enemies[0]
+	var best_d := INF
+	for e in enemies:
+		var d: float = (e.pos - ship.pos).length()
+		if d < best_d:
+			best_d = d
+			best = e
+	return best
+
 func turn_toward(ship, target, dt: float) -> void:
 	var desired: Vector3 = (target.pos - ship.pos).normalized()
 	var cur: Vector3 = ship.heading.normalized()
@@ -285,18 +355,21 @@ func turn_toward(ship, target, dt: float) -> void:
 			return
 		ship.heading = cur.rotated(axis.normalized(), max_turn)
 
-func move_ship(ship, dt: float) -> void:
+func move_ship(ship, dt: float, assigned = null) -> void:
 	var enemies := enemies_of(ship)
 	if enemies.is_empty():
 		return
-	var nearest = enemies[0]
-	var best := INF
-	for e in enemies:
-		var d: float = (e.pos - ship.pos).length()
-		if d < best:
-			best = d
-			nearest = e
-	var d: float = best
+	# 优先朝"被分配的目标"移动；没有分配时退回最近的敌人。
+	var target = assigned
+	if target == null or not target.alive():
+		target = enemies[0]
+		var best := INF
+		for e in enemies:
+			var dd: float = (e.pos - ship.pos).length()
+			if dd < best:
+				best = dd
+				target = e
+	var d: float = (target.pos - ship.pos).length()
 	# 想站在"手册允许范围的 80%"处，舰长按性格上下浮动。
 	var desired_gap := doctrine_max_range(ship.team) * 0.8
 	if ship.captain != null:
@@ -305,7 +378,7 @@ func move_ship(ship, dt: float) -> void:
 	# 只前进或驻守，不后退。
 	# 若允许后退，长程舰可以一直风筝，同速下永远追不上，平衡会塌。
 	if d > desired_gap + 2.0:
-		var dir: Vector3 = (nearest.pos - ship.pos).normalized()
+		var dir: Vector3 = (target.pos - ship.pos).normalized()
 		ship.pos += dir * ship.speed() * dt
 
 func doctrine_max_range(team: String) -> float:
@@ -349,7 +422,9 @@ func ship_fire(ship) -> void:
 	if enemies.is_empty():
 		return
 
-	var primary = pick_target(ship)
+	var primary = _assignments.get(ship.uid, null)
+	if primary == null:
+		primary = pick_target(ship)
 
 	for comp in weapons:
 		var key := "%d:%d" % [ship.uid, comp.index]
@@ -375,7 +450,7 @@ func weapon_can_hit(ship, comp, target) -> bool:
 		return false
 	if d < w_min_range(comp.kind):
 		return false
-	var mount_dir: Vector3 = (ship.basis() * comp.local_offset()).normalized()
+	var mount_dir: Vector3 = (ship.basis() * comp.dir).normalized()
 	var to_target: Vector3 = (target.pos - ship.pos).normalized()
 	return rad_to_deg(mount_dir.angle_to(to_target)) <= WEAPON_ARC_HALF_DEG
 
@@ -415,6 +490,10 @@ func fire_laser(ship, comp, target) -> void:
 		return
 
 	var dmg: float = w_damage(comp.kind) * w_damage_falloff(comp.kind, d) * r.randf_range(0.85, 1.15)
+	# 集火 = 集中火控：命中同一目标时打得更狠，但会有大量溢出。
+	# 用伤害加成去抵消溢出浪费，让"集火 / 自由射击"成为一个真选择。
+	if doctrine[ship.team]["focus"]:
+		dmg *= 1.45
 	dmg *= (1.0 - target.damage_reduction())
 
 	var hit_comp = resolve_hit_compartment(ship, target, from, r)
@@ -475,10 +554,8 @@ func resolve_hit_compartment(shooter, target, origin: Vector3, r: RandomNumberGe
 	for c in target.compartments:
 		if not c.alive():
 			continue
-		var off: Vector3 = c.local_offset()
-		if off.length() < 0.0001:
-			continue
-		var score: float = off.normalized().dot(local_incoming)
+		# 用装甲面朝向判定：谁的面朝向来袭方向，谁挨打
+		var score: float = c.dir.dot(local_incoming)
 		if score > best_score:
 			best_score = score
 			best = c
@@ -495,9 +572,9 @@ func explode_magazine(ship, mag) -> void:
 	for c in ship.compartments:
 		if c == mag or not c.alive():
 			continue
-		var d_theta: float = absf(fmod(c.theta_deg - mag.theta_deg + 180.0, 360.0) - 180.0)
-		var d_h: float = absf(c.h - mag.h)
-		var adjacency: float = maxf(0.0, 1.0 - (d_theta / 180.0) * 0.7 - d_h * 0.3)
+		# 按舰体局部坐标的实际距离算波及：越近越惨
+		var dist: float = (c.local_pos - mag.local_pos).length()
+		var adjacency: float = maxf(0.0, 1.0 - dist / 2.6)
 		if adjacency <= 0.05:
 			continue
 		var was_breached: bool = c.breached

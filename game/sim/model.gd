@@ -17,7 +17,7 @@ enum CompType {
 enum CompState { ONLINE, DAMAGED, OFFLINE }
 enum CapType { AGGRESSIVE, STEADY, CAUTIOUS }
 
-const HULL_RADIUS := 1.15
+const HULL_RADIUS := 1.45
 const SLOT_COUNT := 10
 
 # 每种舱室的固有属性。第一版基线。
@@ -150,27 +150,57 @@ static func comp_color(kind: int) -> Color:
 		CompType.SENSOR:   return Color(0.55, 0.85, 0.90)
 	return Color.WHITE
 
-# 槽位几何：两圈，每圈 5 个，绕中轴均布。
-static func slot_theta(i: int) -> float:
-	return fmod(float(i) * 72.0, 360.0)
+# 舰体硬点：坐标是舰体局部坐标（+Z 舰首，+Y 上，+X 右），dir 是外法线。
+# 几何先定，舱位跟着舰体走——这是"军舰设计"而不是"圆环上摆格子"。
+const HARDPOINTS: Array = [
+	[Vector3(0.0, 0.30, 3.55), Vector3(0, 0.15, 1)],    # 0 舰首主炮位
+	[Vector3(0.0, 0.80, 1.60), Vector3(0, 1, 0.15)],    # 1 背部炮塔 A
+	[Vector3(0.0, 0.80, -0.20), Vector3(0, 1, -0.10)],  # 2 背部炮塔 B
+	[Vector3(-1.30, 0.10, 0.90), Vector3(-1, 0, 0)],    # 3 左舷炮组
+	[Vector3(1.30, 0.10, 0.90), Vector3(1, 0, 0)],      # 4 右舷炮组
+	[Vector3(0.0, -0.70, 2.10), Vector3(0, -1, 0.20)],  # 5 腹部炮塔
+	[Vector3(0.0, 1.15, -1.50), Vector3(0, 1, 0)],      # 6 舰桥 / 传感器
+	[Vector3(-0.70, 0.0, -3.70), Vector3(0, 0, -1)],    # 7 左引擎组
+	[Vector3(0.70, 0.0, -3.70), Vector3(0, 0, -1)],     # 8 右引擎组
+	[Vector3(0.0, 0.20, -2.40), Vector3(0, 1, 0)],      # 9 弹药库
+]
 
-static func slot_h(i: int) -> float:
-	return 1.0 if i < 5 else -1.0
+static func hardpoint_pos(i: int) -> Vector3:
+	return HARDPOINTS[i][0]
 
-# 默认装配：混合火力（2 激光 + 1 长程炮），玩家可改。
+static func hardpoint_dir(i: int) -> Vector3:
+	return HARDPOINTS[i][1]
+
+static func hardpoint_name(i: int) -> String:
+	match i:
+		0: return "舰首炮"
+		1: return "背塔A"
+		2: return "背塔B"
+		3: return "左舷"
+		4: return "右舷"
+		5: return "腹部"
+		6: return "舰桥"
+		7: return "引擎L"
+		8: return "引擎R"
+		9: return "弹药库"
+	return "舱位"
+
+# 默认装配：舰首长程炮、背腹三座激光、两侧近防、舰桥传感器、双引擎、弹药库。
 static func default_loadout() -> Array:
 	return [
-		CompType.WEAPON, CompType.WEAPON, CompType.WEAPON_LONG, CompType.MAGAZINE,
-		CompType.ENGINE, CompType.ENGINE, CompType.ENGINE,
-		CompType.SHIELD, CompType.SHIELD, CompType.SENSOR,
+		CompType.WEAPON_LONG, CompType.WEAPON, CompType.WEAPON,
+		CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE, CompType.SHIELD,
+		CompType.SENSOR, CompType.ENGINE, CompType.ENGINE, CompType.MAGAZINE,
 	]
 
 
 class Compartment:
 	var index: int
 	var kind: int
-	var theta_deg: float
-	var h: float
+	var local_pos: Vector3      # 舰体局部坐标
+	var dir: Vector3            # 外法线（炮口朝向 / 装甲面朝向）
+	var theta_deg: float        # 兼容旧代码：由 local_pos 推出的方位角
+	var h: float                # 兼容旧代码：沿轴位置
 	var radius: float
 	var hp: float
 	var armor: float
@@ -181,11 +211,13 @@ class Compartment:
 	var crew_max: int = 0
 	var breached: bool = false      # 是否已失压（被击穿，人会飞出去）
 
-	func _init(p_index: int, p_kind: int) -> void:
+	func _init(p_index: int, p_kind: int, p_pos: Vector3, p_dir: Vector3) -> void:
 		index = p_index
 		kind = p_kind
-		theta_deg = Model.slot_theta(p_index)
-		h = Model.slot_h(p_index)
+		local_pos = p_pos
+		dir = p_dir.normalized()
+		theta_deg = rad_to_deg(atan2(p_pos.y, p_pos.x))
+		h = p_pos.z
 		radius = Model.comp_radius(p_kind)
 		hp = Model.comp_max_hp(p_kind)
 		armor = Model.comp_armor(p_kind)
@@ -241,8 +273,7 @@ class Compartment:
 		return effective
 
 	func local_offset() -> Vector3:
-		var rad := deg_to_rad(theta_deg)
-		return Vector3(Model.HULL_RADIUS * cos(rad), Model.HULL_RADIUS * sin(rad), h)
+		return local_pos
 
 
 class ShipModel:
@@ -279,7 +310,8 @@ class ShipModel:
 		pos = p_pos
 		var kinds: Array = loadout if loadout.size() == Model.SLOT_COUNT else Model.default_loadout()
 		for i in Model.SLOT_COUNT:
-			compartments.append(Compartment.new(i, kinds[i]))
+			compartments.append(Compartment.new(
+				i, kinds[i], Model.hardpoint_pos(i), Model.hardpoint_dir(i)))
 
 	func alive() -> bool:
 		for c in compartments:

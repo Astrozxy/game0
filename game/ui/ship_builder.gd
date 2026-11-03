@@ -20,9 +20,13 @@ var doctrine := {
 
 # 布局（在 _build_ui 里按窗口尺寸算）
 var center_pos := Vector2.ZERO
-var ring_front := 0.0
-var ring_rear := 0.0
+var hp_scale := 1.0
 var slot_size := 0.0
+
+## 把舰体局部坐标 (x, z) 映射到界面坐标：上方 = 舰首。
+func hardpoint_screen(i: int) -> Vector2:
+	var p: Vector3 = Model.hardpoint_pos(i)
+	return center_pos + Vector2(p.x * hp_scale, -p.z * hp_scale)
 
 func _ready() -> void:
 	size = get_viewport_rect().size
@@ -32,10 +36,9 @@ func _ready() -> void:
 func _build_ui() -> void:
 	var W: float = size.x
 	var H: float = size.y
-	slot_size = clampf(minf(W, H) * 0.085, 56.0, 96.0)
-	center_pos = Vector2(W * 0.30, H * 0.50)
-	ring_front = minf(W, H) * 0.30
-	ring_rear = ring_front * 0.64
+	slot_size = clampf(minf(W, H) * 0.072, 48.0, 78.0)
+	center_pos = Vector2(W * 0.28, H * 0.52)
+	hp_scale = minf(W, H) * 0.044
 
 	var bg := ColorRect.new()
 	bg.color = Color(0.04, 0.05, 0.07)
@@ -50,7 +53,7 @@ func _build_ui() -> void:
 	add_child(title)
 
 	var hint := Label.new()
-	hint.text = "点击舱室切换类型。外圈 = 前部，内圈 = 后部，中心为动力仓。"
+	hint.text = "俯视图：上方是舰首。点击按钮切换该位置的舱室类型。"
 	hint.position = Vector2(W * 0.035, H * 0.105)
 	hint.add_theme_font_size_override("font_size", 14)
 	hint.add_theme_color_override("font_color", Color(0.55, 0.60, 0.66))
@@ -67,10 +70,8 @@ func _build_ui() -> void:
 		var btn := Button.new()
 		btn.size = Vector2(slot_size, slot_size)
 		btn.custom_minimum_size = Vector2(slot_size, slot_size)
-		var radius: float = ring_front if i < 5 else ring_rear
-		var ang: float = deg_to_rad(Model.slot_theta(i))
-		btn.position = center_pos + Vector2(cos(ang), sin(ang)) * radius - Vector2(slot_size, slot_size) * 0.5
-		btn.add_theme_font_size_override("font_size", maxf(10.0, slot_size * 0.17))
+		btn.position = hardpoint_screen(i) - Vector2(slot_size, slot_size) * 0.5
+		btn.add_theme_font_size_override("font_size", maxf(9.0, slot_size * 0.145))
 		btn.pressed.connect(_cycle_slot.bind(i))
 		add_child(btn)
 		slot_buttons.append(btn)
@@ -166,7 +167,7 @@ func _refresh() -> void:
 			Model.CompType.ENGINE: short_name = "引擎"
 			Model.CompType.SHIELD: short_name = "护盾"
 			Model.CompType.SENSOR: short_name = "传感器"
-		btn.text = "%s\nθ%d°" % [short_name, int(Model.slot_theta(i))]
+		btn.text = "%s\n%s" % [short_name, Model.hardpoint_name(i)]
 		var c: Color = Model.comp_color(kind)
 		btn.add_theme_stylebox_override("normal", _flat(c.darkened(0.45)))
 		btn.add_theme_stylebox_override("hover", _flat(c.darkened(0.30)))
@@ -254,9 +255,21 @@ func _panel_style() -> StyleBoxFlat:
 	return s
 
 func _draw() -> void:
-	var front := Color(0.20, 0.24, 0.30)
-	var rear := Color(0.16, 0.19, 0.24)
-	draw_arc(center_pos, ring_front, 0, TAU, 96, front, 2.0, true)
-	draw_arc(center_pos, ring_rear, 0, TAU, 96, rear, 2.0, true)
-	draw_circle(center_pos, slot_size * 0.55, Color(0.14, 0.16, 0.20))
+	# 舰体俯视轮廓：上方舰首，下方舰尾
+	var outline: Array = [
+		Vector2(0.0, 4.9), Vector2(0.55, 3.4), Vector2(1.02, 2.3),
+		Vector2(1.18, -3.4), Vector2(0.92, -4.5), Vector2(-0.92, -4.5),
+		Vector2(-1.18, -3.4), Vector2(-1.02, 2.3), Vector2(-0.55, 3.4),
+	]
+	var pts: PackedVector2Array = PackedVector2Array()
+	for p in outline:
+		pts.append(center_pos + Vector2(p.x * hp_scale, -p.y * hp_scale))
+	draw_colored_polygon(pts, Color(0.10, 0.12, 0.16))
+	pts.append(pts[0])
+	draw_polyline(pts, Color(0.30, 0.36, 0.44), 2.0, true)
+
+	# 中轴线
+	var a := center_pos + Vector2(0, 4.9 * hp_scale)
+	var b := center_pos + Vector2(0, -4.5 * hp_scale)
+	draw_dashed_line(a, b, Color(0.22, 0.26, 0.32), 1.0, 8.0)
 	draw_arc(center_pos, slot_size * 0.55, 0, TAU, 64, Color(0.40, 0.44, 0.50), 2.0, true)

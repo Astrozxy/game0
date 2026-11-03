@@ -34,7 +34,7 @@ var flying_crew: Array = []          # {node, vel, spin, life}
 var beam_mesh: ImmediateMesh
 
 var cam: Camera3D
-var cam_dist := 40.0
+var cam_dist := 30.0
 var cam_target := Vector3.ZERO
 var follow_uid := -1
 
@@ -60,7 +60,7 @@ func _setup_world() -> void:
 
 	var light := DirectionalLight3D.new()
 	light.rotation_degrees = Vector3(-55, -35, 0)
-	light.light_energy = 1.25
+	light.light_energy = 1.05
 	add_child(light)
 
 	var env := WorldEnvironment.new()
@@ -68,8 +68,8 @@ func _setup_world() -> void:
 	e.background_mode = Environment.BG_COLOR
 	e.background_color = Color(0.02, 0.03, 0.05)
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.32, 0.36, 0.44)
-	e.ambient_light_energy = 0.9
+	e.ambient_light_color = Color(0.42, 0.47, 0.58)
+	e.ambient_light_energy = 0.95
 	env.environment = e
 	add_child(env)
 
@@ -90,36 +90,217 @@ func _build_ships() -> void:
 		node.transform.basis = ship.basis()
 		add_child(node)
 
-		var hull := MeshInstance3D.new()
-		var box := BoxMesh.new()
-		box.size = Vector3(2.6, 1.0, 4.4)
-		hull.mesh = box
-		var hm := StandardMaterial3D.new()
-		hm.albedo_color = Color(0.22, 0.32, 0.48) if ship.team == "player" else Color(0.48, 0.22, 0.22)
-		hm.metallic = 0.3
-		hm.roughness = 0.55
-		hull.material_override = hm
-		node.add_child(hull)
-
+		_build_hull(node, ship)
 		for comp in ship.compartments:
-			var cm := MeshInstance3D.new()
-			var cb := BoxMesh.new()
-			cb.size = Vector3(0.9, 0.9, 0.9)
-			cm.mesh = cb
-			cm.position = comp.local_offset()
-			var mat := StandardMaterial3D.new()
-			mat.albedo_color = Model.comp_color(comp.kind)
-			mat.emission_enabled = true
-			mat.emission = Model.comp_color(comp.kind) * 0.25
-			cm.material_override = mat
-			node.add_child(cm)
-			comp_mats["%d:%d" % [ship.uid, comp.index]] = mat
+			_build_pod(node, ship, comp)
 
 		_build_crew_for(node, ship)
 		var em := _make_emitter()
 		node.add_child(em)
 		emitters[ship.uid] = em
 		ship_nodes[ship.uid] = node
+
+# ---------------------------------------------------------------- 舰体
+#
+# 坐标约定：+Z 是舰首方向，+Y 向上，+X 向右。
+# 舰体做成细长的分段结构：舰首锥、主装甲段、舰尾引擎组。
+
+func _metal(c: Color, metallic := 0.22, rough := 0.62) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.metallic = metallic
+	m.roughness = rough
+	return m
+
+func _add_box(parent: Node3D, size: Vector3, pos: Vector3, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var b := BoxMesh.new()
+	b.size = size
+	mi.mesh = b
+	mi.position = pos
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi
+
+func _add_cyl(parent: Node3D, r_top: float, r_bot: float, h: float,
+		pos: Vector3, mat: Material, segs := 8) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var c := CylinderMesh.new()
+	c.top_radius = r_top
+	c.bottom_radius = r_bot
+	c.height = h
+	c.radial_segments = segs
+	mi.mesh = c
+	mi.position = pos
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi
+
+func _basis_from_dir(dir: Vector3) -> Basis:
+	var f := dir.normalized()
+	var up := Vector3.UP
+	if absf(f.dot(up)) > 0.97:
+		up = Vector3.FORWARD
+	var right := up.cross(f).normalized()
+	var u := f.cross(right).normalized()
+	return Basis(right, u, f)
+
+func _team_accent(team: String) -> Color:
+	return Color(0.35, 0.78, 1.0) if team == "player" else Color(1.0, 0.42, 0.35)
+
+func _build_hull(node: Node3D, ship) -> void:
+	var accent := _team_accent(ship.team)
+	var dark := Color(0.19, 0.21, 0.26).lerp(accent, 0.10)
+	var mid := Color(0.27, 0.30, 0.36).lerp(accent, 0.12)
+
+	var hull_mat := _metal(dark, 0.85, 0.30)
+	var plate_mat := _metal(mid, 0.80, 0.34)
+	var accent_mat := _metal(accent * 0.9, 0.30, 0.35)
+	accent_mat.emission_enabled = true
+	accent_mat.emission = accent * 0.55
+
+	# 主装甲段（覆盖舰体中部，硬点都挂在它上面）
+	_add_box(node, Vector3(2.3, 0.95, 4.6), Vector3(0, 0, -0.3), hull_mat)
+	# 背脊
+	_add_box(node, Vector3(0.62, 0.32, 3.4), Vector3(0, 0.55, 0.2), plate_mat)
+	# 腹部装甲
+	_add_box(node, Vector3(1.35, 0.28, 3.6), Vector3(0, -0.50, 0.2), plate_mat)
+
+	# 舰首：逐段收窄（两段锥体，比单一圆锥更像军舰）
+	var bow1 := _add_cyl(node, 0.62, 1.05, 1.5, Vector3(0, 0, 2.65), hull_mat, 6)
+	bow1.rotation_degrees = Vector3(-90, 0, 0)
+	var bow2 := _add_cyl(node, 0.10, 0.62, 1.6, Vector3(0, 0, 4.05), hull_mat, 6)
+	bow2.rotation_degrees = Vector3(-90, 0, 0)
+	# 舰首装甲脊
+	_add_box(node, Vector3(0.34, 0.22, 2.0), Vector3(0, 0.30, 3.1), plate_mat)
+
+	# 舰尾主体
+	_add_box(node, Vector3(2.0, 0.82, 2.0), Vector3(0, 0, -3.15), hull_mat)
+	_add_box(node, Vector3(1.2, 0.30, 1.4), Vector3(0, 0.46, -3.0), plate_mat)
+
+	# 双引擎喷口（对应 7 / 8 号硬点）
+	for ex in [-0.70, 0.70]:
+		var noz := _add_cyl(node, 0.30, 0.36, 0.85, Vector3(ex, 0, -4.30),
+			_metal(Color(0.10, 0.11, 0.13), 0.9, 0.25), 10)
+		noz.rotation_degrees = Vector3(90, 0, 0)
+		var glow := _add_cyl(node, 0.24, 0.24, 0.10, Vector3(ex, 0, -4.72), accent_mat, 10)
+		glow.rotation_degrees = Vector3(90, 0, 0)
+
+	# 舷侧识别灯带
+	for sx in [-1.17, 1.17]:
+		_add_box(node, Vector3(0.05, 0.09, 3.8), Vector3(sx, 0.04, 0.1), accent_mat)
+
+	# 舰桥塔（6 号硬点下方）
+	_add_box(node, Vector3(0.72, 0.55, 1.05), Vector3(0, 0.86, -1.50), plate_mat)
+	_add_box(node, Vector3(0.46, 0.18, 0.70), Vector3(0, 1.16, -1.50), hull_mat)
+	_add_box(node, Vector3(0.30, 0.07, 0.50), Vector3(0, 1.27, -1.50), accent_mat)
+	# 舰桥舷窗
+	for wx in [-0.18, 0.0, 0.18]:
+		_add_box(node, Vector3(0.10, 0.06, 0.04), Vector3(wx, 1.02, -0.97),
+			_emissive(Color(1.0, 0.90, 0.65), 0.8))
+
+	# 舰体侧面装甲板（增加层次）
+	for sx in [-1.16, 1.16]:
+		_add_box(node, Vector3(0.10, 0.52, 2.4), Vector3(sx, -0.10, 1.4), plate_mat)
+
+# ---------------------------------------------------------------- 舱室
+#
+# 舱室是外挂的装甲模块：本体 + 按类型不同的功能件（炮塔/喷口/护盾环/天线）。
+
+func _build_pod(node: Node3D, ship, comp) -> void:
+	var accent := _team_accent(ship.team)
+	var type_col := Model.comp_color(comp.kind)
+	var pod := Node3D.new()
+	pod.position = comp.local_pos
+	pod.transform.basis = _basis_from_dir(comp.dir)
+	node.add_child(pod)
+
+	var base_mat := _metal(Color(0.28, 0.31, 0.37).lerp(type_col, 0.30), 0.82, 0.32)
+	base_mat.emission_enabled = true
+	base_mat.emission = type_col * 0.10
+
+	# 模块本体（朝外的一侧略厚）
+	_add_box(pod, Vector3(0.78, 0.62, 0.86), Vector3.ZERO, base_mat)
+
+	var detail_mat := _metal(type_col.darkened(0.25), 0.55, 0.35)
+
+	match comp.kind:
+		Model.CompType.WEAPON, Model.CompType.WEAPON_LONG, Model.CompType.WEAPON_CLOSE:
+			# 炮塔：基座 + 炮管
+			var base := _add_cyl(pod, 0.26, 0.30, 0.16, Vector3(0, 0.36, 0), detail_mat, 10)
+			var barrel_len := 1.25 if comp.kind == Model.CompType.WEAPON_LONG else 0.75
+			_add_box(pod, Vector3(0.10, 0.10, barrel_len),
+				Vector3(0, 0.36, barrel_len * 0.45), detail_mat)
+			# 炮口
+			_add_box(pod, Vector3(0.15, 0.15, 0.12),
+				Vector3(0, 0.36, barrel_len * 0.9), detail_mat)
+		Model.CompType.ENGINE:
+			var noz := _add_cyl(pod, 0.22, 0.28, 0.42, Vector3(0, 0, -0.45), detail_mat, 10)
+			noz.rotation_degrees = Vector3(90, 0, 0)
+			var gl := _add_cyl(pod, 0.16, 0.16, 0.06, Vector3(0, 0, -0.68), _emissive(accent), 10)
+			gl.rotation_degrees = Vector3(90, 0, 0)
+		Model.CompType.SHIELD:
+			var ring := MeshInstance3D.new()
+			var torus := TorusMesh.new()
+			torus.inner_radius = 0.30
+			torus.outer_radius = 0.42
+			ring.mesh = torus
+			ring.position = Vector3(0, 0.42, 0)
+			ring.rotation_degrees = Vector3(90, 0, 0)
+			ring.material_override = _emissive(type_col)
+			pod.add_child(ring)
+		Model.CompType.SENSOR:
+			var dish := _add_cyl(pod, 0.28, 0.08, 0.16, Vector3(0, 0.42, 0), _metal(Color(0.55, 0.60, 0.66), 0.6, 0.4), 12)
+			dish.rotation_degrees = Vector3(0, 0, 0)
+			_add_box(pod, Vector3(0.04, 0.45, 0.04), Vector3(0.18, 0.55, 0), detail_mat)
+		Model.CompType.CREW:
+			for wx in [-0.22, 0.0, 0.22]:
+				_add_box(pod, Vector3(0.10, 0.06, 0.03), Vector3(wx, 0.16, 0.45),
+					_emissive(Color(1.0, 0.92, 0.70)))
+		Model.CompType.MAGAZINE:
+			_add_box(pod, Vector3(0.84, 0.20, 0.92), Vector3(0, 0.30, 0), detail_mat)
+			_add_box(pod, Vector3(0.30, 0.10, 0.30), Vector3(0, 0.44, 0), _emissive(Color(1.0, 0.72, 0.25)))
+
+	comp_mats["%d:%d" % [ship.uid, comp.index]] = base_mat
+
+func _emissive(c: Color, strength := 0.9) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.emission_enabled = true
+	m.emission = c * strength
+	m.metallic = 0.2
+	m.roughness = 0.4
+	return m
+
+func _build_crew_for(ship_node: Node3D, ship) -> void:
+	var units: Array = []
+	var total_crew := maxi(1, ship.crew_capacity())
+	for i in CREW_PER_SHIP:
+		# 按编制比例分配到舱室
+		var pick := int(float(i) / float(CREW_PER_SHIP) * float(ship.compartments.size()))
+		var comp = ship.compartments[mini(pick, ship.compartments.size() - 1)]
+
+		var fig := MeshInstance3D.new()
+		var capsule := CapsuleMesh.new()
+		capsule.radius = 0.075
+		capsule.height = 0.34
+		fig.mesh = capsule
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(0.85, 0.93, 1.0) if ship.team == "player" else Color(1.0, 0.86, 0.82)
+		mat.emission_enabled = true
+		mat.emission = mat.albedo_color * 0.5
+		fig.material_override = mat
+		fig.position = comp.local_offset()
+		ship_node.add_child(fig)
+
+		units.append({
+			"node": fig,
+			"comp_index": comp.index,
+			"target": comp.local_offset(),
+			"timer": randf_range(0.2, 1.6),
+			"base": comp.local_offset(),
+		})
+	crew_units[ship.uid] = units
 
 ## 受损舱室的粒子发射器：引擎喷火花、武器舱掉碎屑、护盾冒电弧。
 func _make_emitter() -> CPUParticles3D:
@@ -170,36 +351,6 @@ func _update_damage_emitter(ship, node: Node3D) -> void:
 	em.emitting = true
 	em.color = _spark_color(worst.kind)
 	em.amount = 10 + int((1.0 - worst.hp_ratio()) * 18.0)
-
-func _build_crew_for(ship_node: Node3D, ship) -> void:
-	var units: Array = []
-	var total_crew := maxi(1, ship.crew_capacity())
-	for i in CREW_PER_SHIP:
-		# 按编制比例分配到舱室
-		var pick := int(float(i) / float(CREW_PER_SHIP) * float(ship.compartments.size()))
-		var comp = ship.compartments[mini(pick, ship.compartments.size() - 1)]
-
-		var fig := MeshInstance3D.new()
-		var capsule := CapsuleMesh.new()
-		capsule.radius = 0.11
-		capsule.height = 0.52
-		fig.mesh = capsule
-		var mat := StandardMaterial3D.new()
-		mat.albedo_color = Color(0.85, 0.93, 1.0) if ship.team == "player" else Color(1.0, 0.86, 0.82)
-		mat.emission_enabled = true
-		mat.emission = mat.albedo_color * 0.6
-		fig.material_override = mat
-		fig.position = comp.local_offset()
-		ship_node.add_child(fig)
-
-		units.append({
-			"node": fig,
-			"comp_index": comp.index,
-			"target": comp.local_offset(),
-			"timer": randf_range(0.2, 1.6),
-			"base": comp.local_offset(),
-		})
-	crew_units[ship.uid] = units
 
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
@@ -260,7 +411,7 @@ func _build_hud() -> void:
 	layer.add_child(hint)
 
 	var doc_label := Label.new()
-	doc_label.position = Vector2(360, 14)
+	doc_label.position = Vector2(980, 14)
 	doc_label.add_theme_font_size_override("font_size", 14)
 	doc_label.add_theme_color_override("font_color", Color(0.78, 0.72, 0.60))
 	layer.add_child(doc_label)
