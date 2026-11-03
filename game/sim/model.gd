@@ -18,6 +18,11 @@ enum CompState { ONLINE, DAMAGED, OFFLINE }
 enum CapType { AGGRESSIVE, STEADY, CAUTIOUS }
 
 const HULL_RADIUS := 1.45
+# 武器射程（与 BattleSim 的档位保持一致，供舰船自检用）
+const RANGE_LASER := 35.0
+const RANGE_LONG := 55.0
+const RANGE_CLOSE := 14.0
+
 const SLOT_COUNT := 16
 
 # 每种舱室的固有属性。第一版基线。
@@ -257,7 +262,7 @@ const HULLS: Array = [
 			CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE,
 			CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE, CompType.WEAPON_CLOSE,
 			CompType.WEAPON_CLOSE, CompType.SENSOR, CompType.SENSOR,
-			CompType.SHIELD, CompType.SHIELD, CompType.ENGINE, CompType.ENGINE,
+			CompType.WEAPON_LONG, CompType.WEAPON_LONG, CompType.ENGINE, CompType.ENGINE,
 			CompType.MAGAZINE,
 		],
 	},
@@ -435,6 +440,22 @@ class ShipModel:
 			if c.kind == kind:
 				n += 1.0
 		return maxf(1.0, n)
+
+
+	## 本舰当前还能开火的武器里最远的射程；全灭则返回 0
+	func max_weapon_range() -> float:
+		var best := 0.0
+		for c in compartments:
+			if not c.alive():
+				continue
+			match c.kind:
+				Model.CompType.WEAPON:
+					best = maxf(best, Model.RANGE_LASER)
+				Model.CompType.WEAPON_LONG:
+					best = maxf(best, Model.RANGE_LONG)
+				Model.CompType.WEAPON_CLOSE:
+					best = maxf(best, Model.RANGE_CLOSE)
+		return best
 
 	func speed() -> float:
 		var base := 1.6 * Model.hull_speed_mult(hull_class)

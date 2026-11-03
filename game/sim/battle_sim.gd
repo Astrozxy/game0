@@ -374,7 +374,11 @@ func move_ship(ship, dt: float, assigned = null) -> void:
 	var desired_gap := doctrine_max_range(ship.team) * 0.8
 	if ship.captain != null:
 		desired_gap *= ship.captain.gap_mult()
-	desired_gap = clampf(desired_gap, 6.0, 50.0)
+	# 如果自己最远的武器都够不到手册距离，就得压上去，否则永远打不到人
+	var own_reach: float = ship.max_weapon_range()
+	if own_reach > 0.0 and own_reach < desired_gap:
+		desired_gap = own_reach * 0.78
+	desired_gap = clampf(desired_gap, 4.0, 50.0)
 	# 只前进或驻守，不后退。
 	# 若允许后退，长程舰可以一直风筝，同速下永远追不上，平衡会塌。
 	if d > desired_gap + 2.0:
