@@ -254,6 +254,14 @@ func _build_hull(node: Node3D, ship) -> void:
 		var r_tip := _add_box(body, Vector3(0.62, 0.08, 1.80),
 			Vector3(sx * 1.62, -0.06, -2.45), plate_mat)
 		r_tip.rotation_degrees = Vector3(0, sx * 16.0, -sx * 6.0)
+		# 翼梢小翼：把平面翼变成三维
+		var winglet := _add_box(body, Vector3(0.10, 0.58, 1.40),
+			Vector3(sx * 2.30, 0.18, 0.35), plate_mat)
+		winglet.rotation_degrees = Vector3(0, sx * 22.0, -sx * 16.0)
+		# 翼下武器吊舱
+		var wpod := _add_cyl(body, 0.13, 0.13, 1.15, Vector3(sx * 1.55, -0.30, 1.30), hull_mat, 8)
+		wpod.rotation_degrees = Vector3(90, 0, 0)
+		_add_box(body, Vector3(0.10, 0.24, 0.36), Vector3(sx * 1.55, -0.17, 1.05), dark_mat)
 		# 翼尖导航灯
 		_add_box(body, Vector3(0.09, 0.09, 0.09), Vector3(sx * 2.35, -0.10, 0.70), accent_mat)
 
