@@ -52,6 +52,7 @@ var wreck_parts: Array = []
 
 var cam: Camera3D
 var cam_dist := 58.0
+var cam_dir := Vector3(0, 0.78, -0.63).normalized()
 var cam_target := Vector3.ZERO
 var follow_uid := -1
 
@@ -90,6 +91,9 @@ func _ready() -> void:
 				cam_target = s.pos
 				break
 		cam_dist = 8.0
+		if args.has("--side"):
+			cam_dir = Vector3(0.55, 0.16, -0.82).normalized()
+			cam_dist = 13.0
 	_apply_camera()
 
 func _setup_world() -> void:
@@ -966,8 +970,7 @@ func _cycle_speed() -> void:
 func _apply_camera() -> void:
 	if cam == null:
 		return
-	var dir := Vector3(0, 0.78, -0.63).normalized()
-	cam.position = cam_target + dir * cam_dist
+	cam.position = cam_target + cam_dir * cam_dist
 	cam.look_at(cam_target)
 
 func _unhandled_input(event: InputEvent) -> void:
