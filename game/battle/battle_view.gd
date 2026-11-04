@@ -205,68 +205,91 @@ func _build_hull(node: Node3D, ship) -> void:
 	var accent_mat: StandardMaterial3D = mats["accent"]
 	var line_mat := _metal(Color(0.10, 0.11, 0.14), 0.6, 0.5)
 
-	# ---- 下层舰体：最长最宽，决定了俯视轮廓 ----
-	_add_box(body, Vector3(3.15, 0.50, 10.6), Vector3(0, -0.28, 0.10), hull_mat)
-	# ---- 主甲板 ----
-	_add_box(body, Vector3(2.85, 0.42, 9.20), Vector3(0, 0.10, 0.0), plate_mat)
-	# ---- 上层甲板：向内收，形成台阶与阴影 ----
-	_add_box(body, Vector3(2.15, 0.36, 6.60), Vector3(0, 0.47, -0.50), hull_mat)
+	# ============ 主脊：窄而高，整艘舰的中轴 ============
+	_add_box(body, Vector3(1.90, 1.00, 9.20), Vector3(0, 0.00, -0.30), hull_mat)
+	# 主脊背鳍（让俯视有中轴线）
+	_add_box(body, Vector3(0.70, 0.30, 6.60), Vector3(0, 0.62, -0.40), plate_mat)
+	# 主脊下腹
+	_add_box(body, Vector3(1.50, 0.34, 7.40), Vector3(0, -0.58, -0.20), plate_mat)
 
-	# ---- 舰首：三棱楔形（俯视是尖的），压扁成尖锐撞角 ----
-	var prow := _add_cyl(body, 0.06, 1.55, 3.0, Vector3(0, -0.05, 6.20), hull_mat, 3)
-	prow.rotation_degrees = Vector3(-90, 0, 0)
-	prow.scale = Vector3(1.0, 1.0, 0.44)
-	# 舰首甲板脊
-	_add_box(body, Vector3(0.90, 0.22, 3.20), Vector3(0, 0.18, 5.00), plate_mat)
-	# 舰首折线棱（两舷内收的棱线，远看能看出"船头"）
+	# ============ 舰首：四棱矛尖（亚盾之矛的矛头） ============
+	var spear := _add_cyl(body, 0.04, 1.35, 3.40, Vector3(0, 0.02, 6.10), hull_mat, 4)
+	spear.rotation_degrees = Vector3(-90, 45, 0)
+	spear.scale = Vector3(0.72, 1.0, 0.66)
+	# 矛尖上的甲板脊
+	_add_box(body, Vector3(0.34, 0.22, 3.00), Vector3(0, 0.30, 5.10), plate_mat)
+	# 矛头两侧的棱线
 	for sx in [-1.0, 1.0]:
-		var chine := _add_box(body, Vector3(0.16, 0.34, 2.60),
-			Vector3(sx * 1.15, -0.12, 4.60), plate_mat)
-		chine.rotation_degrees = Vector3(0, sx * 7.0, 0)
+		var edge := _add_box(body, Vector3(0.10, 0.26, 2.60),
+			Vector3(sx * 0.62, 0.02, 4.90), plate_mat)
+		edge.rotation_degrees = Vector3(0, sx * 6.0, 0)
 
-	# ---- 舰尾：加宽的引擎块，比舰体更宽，形成背鳍感 ----
-	_add_box(body, Vector3(2.95, 0.85, 2.20), Vector3(0, -0.05, -5.50), hull_mat)
-	_add_box(body, Vector3(3.25, 0.30, 1.40), Vector3(0, 0.42, -5.40), plate_mat)
+	# ============ 两舷后掠翼：舷炮的挂载面 ============
+	for sx in [-1.0, 1.0]:
+		# 前翼（大，向后掠）
+		var fin_f := _add_box(body, Vector3(1.90, 0.16, 3.40),
+			Vector3(sx * 1.35, 0.06, 1.40), plate_mat)
+		fin_f.rotation_degrees = Vector3(0, sx * 24.0, 0)
+		# 翼根加厚
+		_add_box(body, Vector3(0.70, 0.30, 2.20), Vector3(sx * 0.85, 0.10, 1.40), hull_mat)
+		# 后翼（小）
+		var fin_r := _add_box(body, Vector3(1.30, 0.14, 2.60),
+			Vector3(sx * 1.30, 0.04, -2.10), plate_mat)
+		fin_r.rotation_degrees = Vector3(0, sx * 18.0, 0)
+		# 翼端识别灯
+		_add_box(body, Vector3(0.10, 0.10, 0.10), Vector3(sx * 2.05, 0.10, 1.20), accent_mat)
 
-	# ---- 舷侧外挂平台：舷炮坐在上面；中间挖出机库开口 ----
-	for sx in [-1.60, 1.60]:
-		_add_box(body, Vector3(0.55, 0.34, 4.60), Vector3(sx, -0.02, 1.30), plate_mat)
-		_add_box(body, Vector3(0.10, 0.55, 1.90), Vector3(sx * 1.02, -0.18, 2.10), dark_mat)
-		_add_box(body, Vector3(0.12, 0.08, 2.10), Vector3(sx * 1.02, 0.16, 2.10), line_mat)
-
-	# ---- 上层建筑：三层梯形舰桥 ----
-	_add_box(body, Vector3(1.55, 0.55, 2.20), Vector3(0, 0.92, -2.60), plate_mat)
-	_add_box(body, Vector3(1.10, 0.45, 1.60), Vector3(0, 1.36, -2.60), hull_mat)
-	_add_box(body, Vector3(0.70, 0.30, 1.10), Vector3(0, 1.68, -2.60), plate_mat)
-	for wy in [1.30, 1.62]:
-		for wx in [-0.42, 0.42]:
-			_add_box(body, Vector3(0.10, 0.07, 0.05), Vector3(wx, wy, -1.80), mats["glow"])
+	# ============ 舰桥：塔 + 穹顶 ============
+	_add_box(body, Vector3(1.10, 0.60, 2.40), Vector3(0, 0.88, -2.80), plate_mat)
+	_add_box(body, Vector3(0.80, 0.40, 1.60), Vector3(0, 1.30, -2.80), hull_mat)
+	var dome := MeshInstance3D.new()
+	var sph := SphereMesh.new()
+	sph.radius = 0.44
+	sph.height = 0.70
+	dome.mesh = sph
+	dome.position = Vector3(0, 1.62, -2.95)
+	dome.material_override = plate_mat
+	body.add_child(dome)
+	# 舷窗
+	for wx in [-0.28, 0.28]:
+		_add_box(body, Vector3(0.10, 0.07, 0.05), Vector3(wx, 1.24, -1.98), mats["glow"])
 	# 桅杆
-	_add_box(body, Vector3(0.06, 1.10, 0.06), Vector3(0, 2.20, -2.90), plate_mat)
-	_add_box(body, Vector3(0.50, 0.04, 0.04), Vector3(0, 2.60, -2.90), plate_mat)
+	_add_box(body, Vector3(0.05, 1.00, 0.05), Vector3(0, 2.20, -3.05), plate_mat)
 
-	# ---- 炮位基座：让炮塔坐在装甲座上，而不是浮在甲板 ----
+	# ============ 舰尾：引擎段 + 双短舱 ============
+	_add_box(body, Vector3(1.95, 0.80, 1.80), Vector3(0, -0.05, -5.30), hull_mat)
+	_add_box(body, Vector3(2.30, 0.26, 1.20), Vector3(0, 0.40, -5.20), plate_mat)
+	# 短舱（引擎吊舱）：向外伸出的两种视感
+	for ex in [-0.92, 0.92]:
+		var nac := _add_box(body, Vector3(0.52, 0.52, 2.20), Vector3(ex * 1.55, 0.06, -4.90), hull_mat)
+		# 短舱挂架
+		_add_box(body, Vector3(0.34, 0.14, 0.60), Vector3(ex * 1.10, 0.06, -4.60), plate_mat)
+		# 短舱尾部发光环
+		_add_box(body, Vector3(0.44, 0.44, 0.10), Vector3(ex * 1.55, 0.06, -5.98), accent_mat)
+
+	# ============ 腹部龙骨 ============
+	var keel := _add_box(body, Vector3(0.46, 0.55, 3.60), Vector3(0, -0.72, 0.80), plate_mat)
+	# 腹部散热格栅
+	for i in 4:
+		_add_box(body, Vector3(1.20, 0.06, 0.14), Vector3(0, -0.62, -2.40 + float(i) * 1.10), line_mat)
+
+	# ============ 炮位基座（跟随各级硬点） ============
 	for hi in Model.slot_count(ship.hull_class):
 		var nm := Model.hardpoint_name(ship.hull_class, hi)
 		var hp := Model.hardpoint_pos(ship.hull_class, hi)
 		if nm.begins_with("背塔") or nm.begins_with("前塔"):
-			_add_cyl(node, 0.50 * hx, 0.56 * hx, 0.28 * hy,
-				Vector3(hp.x, hp.y - 0.30 * hy, hp.z), plate_mat, 10)
+			_add_cyl(node, 0.46 * hx, 0.52 * hx, 0.26 * hy,
+				Vector3(hp.x, hp.y - 0.28 * hy, hp.z), plate_mat, 10)
 		elif nm.begins_with("腹塔"):
-			_add_cyl(node, 0.50 * hx, 0.56 * hx, 0.26 * hy,
-				Vector3(hp.x, hp.y + 0.30 * hy, hp.z), plate_mat, 10)
+			_add_cyl(node, 0.46 * hx, 0.52 * hx, 0.24 * hy,
+				Vector3(hp.x, hp.y + 0.28 * hy, hp.z), plate_mat, 10)
 
-	# ---- 腹部装甲与散热格栅 ----
-	_add_box(body, Vector3(2.20, 0.18, 6.00), Vector3(0, -0.58, 0.20), plate_mat)
-	for i in 5:
-		_add_box(body, Vector3(1.70, 0.06, 0.16), Vector3(0, -0.68, -2.20 + float(i) * 1.10), line_mat)
+	# ============ 甲板分割线 ============
+	for i in 6:
+		var z := -4.60 + float(i) * 1.30
+		_add_box(body, Vector3(1.94, 0.03, 0.03), Vector3(0, 0.52, z), line_mat)
 
-	# ---- 甲板分割线 ----
-	for i in 8:
-		var z := -4.40 + float(i) * 1.25
-		_add_box(body, Vector3(2.90, 0.03, 0.03), Vector3(0, 0.32, z), line_mat)
-
-	# ---- 引擎尾焰（按舰级的引擎硬点位置放置）----
+	# ============ 引擎尾焰 ============
 	var eng_pts: Array = []
 	var hcls: int = ship.hull_class
 	for hi2 in Model.slot_count(hcls):
@@ -275,12 +298,12 @@ func _build_hull(node: Node3D, ship) -> void:
 	for ep in eng_pts:
 		var plume := MeshInstance3D.new()
 		var cone := CylinderMesh.new()
-		cone.top_radius = 0.24
+		cone.top_radius = 0.22
 		cone.bottom_radius = 0.02
-		cone.height = 1.5
+		cone.height = 1.6
 		cone.radial_segments = 10
 		plume.mesh = cone
-		plume.position = Vector3(ep.x, ep.y, ep.z - 0.95)
+		plume.position = Vector3(ep.x, ep.y, ep.z - 1.00)
 		plume.rotation_degrees = Vector3(-90, 0, 0)
 		var pm := StandardMaterial3D.new()
 		pm.albedo_color = Color(accent.r, accent.g, accent.b, 0.22)
@@ -292,9 +315,9 @@ func _build_hull(node: Node3D, ship) -> void:
 		plume.material_override = pm
 		node.add_child(plume)
 
-	# ---- 舷侧灯带：沿外层轮廓 ----
-	for sx2 in [-1.86, 1.86]:
-		_add_box(body, Vector3(0.05, 0.08, 5.00), Vector3(sx2, 0.05, 0.40), accent_mat)
+	# ============ 翼缘灯带 ============
+	for sx2 in [-1.0, 1.0]:
+		_add_box(body, Vector3(0.05, 0.07, 2.40), Vector3(sx2 * 1.75, 0.05, 0.90), accent_mat)
 
 	_build_hull_greebles(node, ship)
 	if ship.hull_class == Model.HullClass.CARRIER:
