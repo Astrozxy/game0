@@ -221,11 +221,14 @@ func _build_hull(node: Node3D, ship) -> void:
 
 	# ============ 舰首矛尖：四棱锥（先绕 X -90 立轴，再绕自身轴滚 45°）============
 	var spear := _add_cyl(body, 0.03, 1.12, 3.90, Vector3(0, 0.02, 6.05), hull_mat, 4)
-	spear.rotation_degrees = Vector3(90, 0, 45)
+	# 直接构造基：把锥体的 +Y 轴映射到 +Z（舰首），再绕自身轴滚 45°。
+	# 用欧拉角做不到——YXZ 顺序会把轴带偏 45°，看起来就是歪的。
+	var axis_basis := Basis(Vector3(1, 0, 0), Vector3(0, 0, 1), Vector3(0, -1, 0))
+	spear.transform.basis = axis_basis * Basis(Vector3.UP, deg_to_rad(45))
 	spear.scale = Vector3(0.80, 1.0, 0.62)
 	# 矛尖上脊
 	var crest := _add_cyl(body, 0.04, 0.30, 3.10, Vector3(0, 0.30, 5.20), plate_mat, 4)
-	crest.rotation_degrees = Vector3(90, 0, 45)
+	crest.transform.basis = axis_basis * Basis(Vector3.UP, deg_to_rad(45))
 	# 矛头装甲带
 	_add_box(body, Vector3(0.9, 0.20, 1.5), Vector3(0, 0.10, 3.60), plate_mat)
 
